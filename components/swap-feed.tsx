@@ -138,7 +138,7 @@ export default function SwapFeed() {
 
   useEffect(() => {
     let es: EventSource | null = null;
-    let lastSlot = 0;
+    const seenSigs = new Set<string>();
 
     function connect() {
       es = new EventSource("/api/wallets/stream");
@@ -146,8 +146,9 @@ export default function SwapFeed() {
       es.onmessage = (ev) => {
         try {
           const swap: Swap = JSON.parse(ev.data);
-          if (swap.slot === lastSlot) return;
-          lastSlot = swap.slot;
+          if (seenSigs.has(swap.signature)) return;
+          seenSigs.add(swap.signature);
+          if (seenSigs.size > 200) seenSigs.clear();
           setSwaps((prev) => [swap, ...prev].slice(0, 50));
           setStats((prev) => ({
             total: prev.total + 1,
