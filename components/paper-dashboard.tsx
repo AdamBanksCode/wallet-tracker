@@ -115,16 +115,8 @@ function TraderCard({ traderId }: { traderId: string }) {
       } catch {}
     };
 
-    const iv = setInterval(() => {
-      fetch(`/api/paper/${traderId}/snapshot`)
-        .then((r) => r.json())
-        .then(setSnap)
-        .catch(() => {});
-    }, 30000);
-
     return () => {
       es.close();
-      clearInterval(iv);
     };
   }, [traderId]);
 
