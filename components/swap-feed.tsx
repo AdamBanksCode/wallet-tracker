@@ -1,9 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 
 interface TokenInfo {
   name: string;
@@ -37,23 +34,24 @@ interface Swap {
 }
 
 function formatUsd(val: number): string {
-  if (val >= 1000) return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (val >= 1) return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (val >= 1_000_000_000) return "$" + (val / 1_000_000_000).toFixed(2) + "B";
+  if (val >= 1_000_000) return "$" + (val / 1_000_000).toFixed(2) + "M";
+  if (val >= 1_000) return "$" + (val / 1_000).toFixed(2) + "K";
+  if (val >= 1) return "$" + val.toFixed(2);
+  if (val >= 0.0001) return "$" + val.toFixed(4);
+  return "$" + val.toExponential(2);
 }
 
 function formatAmount(val: number): string {
-  if (val >= 1_000_000) return (val / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "M";
-  if (val >= 1_000) return (val / 1_000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "K";
-  return val.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (val >= 1_000_000_000) return (val / 1_000_000_000).toFixed(2) + "B";
+  if (val >= 1_000_000) return (val / 1_000_000).toFixed(2) + "M";
+  if (val >= 1_000) return (val / 1_000).toFixed(2) + "K";
+  if (val >= 1) return val.toFixed(2);
+  return val.toFixed(4);
 }
 
 function formatSol(val: number): string {
-  return val.toLocaleString(undefined, { maximumFractionDigits: 4 }) + " SOL";
-}
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString();
+  return val.toFixed(4) + " SOL";
 }
 
 function AgeCounter({ detectedAt }: { detectedAt: number }) {
@@ -64,8 +62,18 @@ function AgeCounter({ detectedAt }: { detectedAt: number }) {
     const iv = setInterval(update, 1000);
     return () => clearInterval(iv);
   }, [detectedAt]);
-  if (age < 60) return <span>{age}s</span>;
-  return <span>{Math.floor(age / 60)}m{age % 60}s</span>;
+  if (age < 60) return <span>{age}s ago</span>;
+  return <span>{Math.floor(age / 60)}m{age % 60}s ago</span>;
+}
+
+function computeMcap(swap: Swap): number | null {
+  const isBuy = swap.type === "buy";
+  const tokenSide = isBuy ? swap.to : swap.from;
+  const token = tokenSide.token;
+  if (!token.price?.usd || token.price.usd <= 0) return null;
+  // Standard supply for SPL tokens: 10^decimals (most memecoins use 1B supply with 6 decimals)
+  const supply = token.decimals <= 9 ? Math.pow(10, token.decimals) : 1e9;
+  return token.price.usd * supply;
 }
 
 function SwapCard({ swap }: { swap: Swap }) {
@@ -74,106 +82,99 @@ function SwapCard({ swap }: { swap: Swap }) {
   const tokenSide = isBuy ? swap.to : swap.from;
   const token = tokenSide.token;
   const solAmount = solSide.amount;
+  const mcap = computeMcap(swap);
 
   return (
-    <Card
-      className="border-l-4 transition-all duration-300 animate-in fade-in slide-in-from-top-2"
-      style={{ borderLeftColor: isBuy ? "var(--color-chart-2)" : "var(--color-destructive)" }}
+    <div
+      className={`border-l-2 rounded-md bg-card px-3 py-2 text-xs animate-in fade-in slide-in-from-top-1 duration-200 ${
+        isBuy ? "border-l-green-500" : "border-l-red-500"
+      }`}
     >
-      <CardContent className="p-4 space-y-2">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Badge variant={isBuy ? "default" : "destructive"} className="text-xs font-bold">
-              {isBuy ? "BUY" : "SELL"}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{swap.program}</span>
-            <span className="text-xs font-semibold text-green-500">{formatUsd(swap.volume.usd)}</span>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{formatTime(swap.time)}</span>
-            <AgeCounter detectedAt={swap.time} />
-          </div>
-        </div>
+      {/* Row 1: Direction + Token + Volume + Age */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`font-bold text-[10px] px-1 py-0.5 rounded ${
+            isBuy
+              ? "bg-green-500/15 text-green-500"
+              : "bg-red-500/15 text-red-500"
+          }`}
+        >
+          {isBuy ? "BUY" : "SELL"}
+        </span>
+        {token.image && (
+          <img
+            src={token.image}
+            alt=""
+            className="w-4 h-4 rounded-full"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        )}
+        <span className="font-bold truncate">{token.name}</span>
+        <span className="text-muted-foreground">{token.symbol}</span>
+        <span className="ml-auto text-green-500 font-semibold">
+          {formatUsd(swap.volume.usd)}
+        </span>
+        <span className="text-muted-foreground">
+          <AgeCounter detectedAt={swap.time} />
+        </span>
+      </div>
 
-        {/* Token info */}
-        <div className="flex items-center gap-2">
-          {token.image && (
-            <img
-              src={token.image}
-              alt={token.symbol}
-              className="w-5 h-5 rounded-full"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          )}
-          <span className="text-sm font-bold">{token.name}</span>
-          <span className="text-xs text-muted-foreground">{token.symbol}</span>
-        </div>
+      {/* Row 2: Contract address */}
+      <code className="text-[9px] text-amber-500 dark:text-amber-400 select-all cursor-pointer block mt-1 truncate">
+        {token.address}
+      </code>
 
-        {/* Contract address */}
-        <code className="text-[10px] text-amber-500 dark:text-amber-400 break-all select-all cursor-pointer block">
-          {token.address}
-        </code>
-
-        <Separator />
-
-        {/* Swap details */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-          <div>
-            <span className="text-muted-foreground">{isBuy ? "Spent: " : "Sold: "}</span>
-            <span className="font-semibold">
-              {isBuy ? formatSol(solAmount) : formatAmount(swap.from.amount) + " " + swap.from.token.symbol}
-            </span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">{isBuy ? "Got: " : "Got: "}</span>
-            <span className="font-semibold">
-              {isBuy ? formatAmount(swap.to.amount) + " " + swap.to.token.symbol : formatSol(solAmount)}
-            </span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Price: </span>
-            <span className="font-medium">{formatUsd(swap.price.usd)}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">MCap: </span>
-            <span className="font-medium">
-              {token.price?.usd
-                ? formatUsd(token.price.usd * (10 ** token.decimals > 1e9 ? 1e9 : 10 ** token.decimals))
-                : "—"}
-            </span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Volume: </span>
-            <span className="font-medium">{formatSol(swap.volume.sol)}</span>
-          </div>
-          {swap.pools[0] && (
-            <div>
-              <span className="text-muted-foreground">Pool: </span>
-              <span className="font-medium truncate" title={swap.pools[0]}>
-                {swap.pools[0].slice(0, 8)}...
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Signature */}
-        <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1">
-          <a
-            href={`https://solscan.io/tx/${swap.tx}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors truncate max-w-[240px]"
-            title={swap.tx}
-          >
-            {swap.tx.slice(0, 32)}...
-          </a>
-          <span className="font-medium text-foreground">
-            <AgeCounter detectedAt={swap.time} /> ago
+      {/* Row 3: Swap details inline */}
+      <div className="flex items-center gap-3 mt-1.5 text-muted-foreground flex-wrap">
+        <span>
+          {isBuy ? "Spent " : "Sold "}
+          <span className="text-foreground font-medium">
+            {isBuy
+              ? formatSol(solAmount)
+              : formatAmount(swap.from.amount) + " " + swap.from.token.symbol}
           </span>
-        </div>
-      </CardContent>
-    </Card>
+        </span>
+        <span>
+          {"Got "}
+          <span className="text-foreground font-medium">
+            {isBuy
+              ? formatAmount(swap.to.amount) + " " + swap.to.token.symbol
+              : formatSol(solAmount)}
+          </span>
+        </span>
+        <span>
+          {"@ "}
+          <span className="text-foreground font-medium">
+            {formatUsd(swap.price.usd)}
+          </span>
+        </span>
+        {mcap && (
+          <span>
+            {"MC "}
+            <span className="text-foreground font-medium">
+              {formatUsd(mcap)}
+            </span>
+          </span>
+        )}
+        <span className="text-[10px]">{swap.program}</span>
+      </div>
+
+      {/* Row 4: Tx link */}
+      <div className="flex items-center justify-between mt-1 text-[9px] text-muted-foreground">
+        <a
+          href={`https://solscan.io/tx/${swap.tx}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-foreground transition-colors truncate"
+          title={swap.tx}
+        >
+          {swap.tx.slice(0, 24)}...
+        </a>
+        <span>{formatSol(swap.volume.sol)} vol</span>
+      </div>
+    </div>
   );
 }
 
@@ -193,8 +194,6 @@ export default function SwapFeed() {
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
-
-          // Skip pings and connection messages
           if (data === "ping" || data.type === "connected") return;
 
           const swap: Swap = data;
@@ -221,29 +220,28 @@ export default function SwapFeed() {
   }, []);
 
   return (
-    <div className="space-y-3" ref={scrollRef}>
+    <div className="space-y-1.5" ref={scrollRef}>
       {/* Status bar */}
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between text-[10px] pb-1">
+        <div className="flex items-center gap-1.5">
           <div
-            className={`w-2 h-2 rounded-full ${
+            className={`w-1.5 h-1.5 rounded-full ${
               connected ? "bg-green-500 animate-pulse" : "bg-red-500"
             }`}
           />
           <span className="text-muted-foreground">
-            {connected ? "Live — SolanaTracker DataStream" : "Reconnecting..."}
+            {connected ? "Live" : "Reconnecting..."}
           </span>
         </div>
-        <div className="flex items-center gap-4 text-muted-foreground">
+        <div className="flex items-center gap-3 text-muted-foreground">
           <span>Trades: {stats.total}</span>
           <span>Vol: {formatUsd(stats.totalVolume)}</span>
         </div>
       </div>
 
-      {/* Trade list */}
       {swaps.length === 0 && (
         <div className="text-center text-muted-foreground py-12 text-sm">
-          Waiting for trades from tracked wallets...
+          Waiting for trades...
         </div>
       )}
       {swaps.map((swap) => (
