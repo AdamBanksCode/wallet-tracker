@@ -63,7 +63,8 @@ function AgeCounter({ detectedAt }: { detectedAt: number }) {
     return () => clearInterval(iv);
   }, [detectedAt]);
   if (age < 60) return <span>{age}s ago</span>;
-  return <span>{Math.floor(age / 60)}m{age % 60}s ago</span>;
+  if (age < 3600) return <span>{Math.floor(age / 60)}m{age % 60}s ago</span>;
+  return <span>{Math.floor(age / 3600)}h{Math.floor((age % 3600) / 60)}m ago</span>;
 }
 
 function computeMcap(swap: Swap): number | null {
@@ -71,9 +72,8 @@ function computeMcap(swap: Swap): number | null {
   const tokenSide = isBuy ? swap.to : swap.from;
   const token = tokenSide.token;
   if (!token.price?.usd || token.price.usd <= 0) return null;
-  // Standard supply for SPL tokens: 10^decimals (most memecoins use 1B supply with 6 decimals)
-  const supply = token.decimals <= 9 ? Math.pow(10, token.decimals) : 1e9;
-  return token.price.usd * supply;
+  // Most Solana memecoins (pump.fun etc) have 1B supply
+  return token.price.usd * 1_000_000_000;
 }
 
 function SwapCard({ swap }: { swap: Swap }) {
@@ -150,7 +150,7 @@ function SwapCard({ swap }: { swap: Swap }) {
             {formatUsd(swap.price.usd)}
           </span>
         </span>
-        {mcap && (
+        {mcap != null && (
           <span>
             {"MC "}
             <span className="text-foreground font-medium">
@@ -194,14 +194,46 @@ export default function SwapFeed() {
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
-          if (data === "ping" || data.type === "connected") return;
+          if (data === "ping") return;
 
+          // Handle connection message
+          if (data.type === "connected") return;
+
+          // Handle history batch (sent on reconnect/refresh)
+          if (data.type === "history" && Array.isArray(data.swaps)) {
+            const historySwaps: Swap[] = [];
+            let vol = 0;
+            for (const swap of data.swaps) {
+              if (swap.tx && !seenTxs.has(swap.tx)) {
+                seenTxs.add(swap.tx);
+                historySwaps.push(swap);
+                vol += swap.volume?.usd || 0;
+              }
+            }
+            if (historySwaps.length > 0) {
+              setSwaps((prev) => {
+                const merged = [...prev];
+                for (const s of historySwaps) {
+                  if (!merged.some((m) => m.tx === s.tx)) merged.push(s);
+                }
+                merged.sort((a, b) => b.time - a.time);
+                return merged.slice(0, 100);
+              });
+              setStats((prev) => ({
+                total: prev.total + historySwaps.length,
+                totalVolume: prev.totalVolume + vol,
+              }));
+            }
+            return;
+          }
+
+          // Handle individual swap
           const swap: Swap = data;
           if (!swap.tx || seenTxs.has(swap.tx)) return;
           seenTxs.add(swap.tx);
-          if (seenTxs.size > 200) seenTxs.clear();
+          if (seenTxs.size > 500) seenTxs.clear();
 
-          setSwaps((prev) => [swap, ...prev].slice(0, 50));
+          setSwaps((prev) => [swap, ...prev].slice(0, 100));
           setStats((prev) => ({
             total: prev.total + 1,
             totalVolume: prev.totalVolume + (swap.volume?.usd || 0),
