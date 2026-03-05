@@ -10,6 +10,11 @@ interface Position {
   avgEntryPrice: number;
   entryUsd: number;
   entryTime: number;
+  currentValueUsd: number;
+  unrealizedPnl: number;
+  unrealizedPnlPct: number;
+  livePrice?: number;
+  livePriceTime?: number;
 }
 
 interface ScenarioData {
@@ -33,6 +38,7 @@ interface Trade {
   quotedPriceUsd: number;
   priceImpact: number;
   feeUsd: number;
+  sellPct: number | null;
   idealBalance: number;
   idealPnl: number;
   pessBalance: number;
@@ -203,6 +209,7 @@ function TraderCard({ traderId }: { traderId: string }) {
               </div>
               {i.openPositions.map((pos) => {
                 const pp = p.openPositions.find((x) => x.mint === pos.mint);
+                const hasLive = pos.livePriceTime && (Date.now() - pos.livePriceTime) < 300000;
                 return (
                   <div
                     key={pos.mint}
@@ -213,8 +220,14 @@ function TraderCard({ traderId }: { traderId: string }) {
                       <span className="text-muted-foreground">{pos.name}</span>
                     </span>
                     <span className="flex gap-2">
-                      <span className="text-blue-500">{usd(pos.entryUsd)}</span>
-                      {pp && <span className="text-orange-500">{usd(pp.entryUsd)}</span>}
+                      <span className="text-muted-foreground">cost:{usd(pos.entryUsd)}</span>
+                      {hasLive && (
+                        <span className="text-blue-500">now:{usd(pos.currentValueUsd)}</span>
+                      )}
+                      <span className={pnlColor(pos.unrealizedPnl)}>
+                        {pnlSign(pos.unrealizedPnl)}{usd(pos.unrealizedPnl)}
+                        ({pnlSign(pos.unrealizedPnlPct)}{pos.unrealizedPnlPct.toFixed(1)}%)
+                      </span>
                       <span className="text-muted-foreground">{timeAgo(pos.entryTime)}</span>
                     </span>
                   </div>
@@ -243,7 +256,7 @@ function TraderCard({ traderId }: { traderId: string }) {
                             : "bg-red-500/15 text-red-500"
                         }`}
                       >
-                        {t.type === "buy" ? "B" : "S"}
+                        {t.type === "buy" ? "B" : `S${t.sellPct != null ? ` ${(t.sellPct * 100).toFixed(0)}%` : ""}`}
                       </span>
                       <span className="font-semibold">{t.tokenSymbol}</span>
                       <span className="text-muted-foreground">
