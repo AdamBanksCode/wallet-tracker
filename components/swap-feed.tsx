@@ -26,6 +26,7 @@ interface Swap {
   decode_to_track_ms: number;
   slots_ahead: number;
   estimated_ahead_ms: number;
+  amounts_from_inner: boolean;
 }
 
 function tokenMint(swap: Swap): string {
@@ -37,8 +38,16 @@ function tokenMint(swap: Swap): string {
   return tin || tout || "unknown";
 }
 
-function formatAmount(val: number | null): string {
+function formatAmount(val: number | null, mint: string | null): string {
   if (val === null) return "—";
+  // SOL uses 9 decimals, most SPL tokens use 6
+  if (mint === SOL_MINT) {
+    return (val / 1e9).toLocaleString(undefined, { maximumFractionDigits: 4 }) + " SOL";
+  }
+  // For SPL tokens, assume 6 decimals (pump tokens, most memecoins)
+  if (val > 1e9) {
+    return (val / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
   return val.toLocaleString();
 }
 
@@ -100,11 +109,12 @@ function SwapCard({ swap }: { swap: Swap }) {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <div>
             <span className="text-muted-foreground">In: </span>
-            <span className="font-medium">{formatAmount(swap.amount_in)}</span>
+            <span className="font-medium">{formatAmount(swap.amount_in, swap.token_in_mint)}</span>
+            {swap.amounts_from_inner && <span className="text-green-500 ml-1" title="Verified on-chain">✓</span>}
           </div>
           <div>
             <span className="text-muted-foreground">Out: </span>
-            <span className="font-medium">{formatAmount(swap.amount_out)}</span>
+            <span className="font-medium">{formatAmount(swap.amount_out, swap.token_out_mint)}</span>
           </div>
           <div>
             <span className="text-muted-foreground">Slot: </span>
@@ -146,7 +156,15 @@ export default function SwapFeed() {
       es.onmessage = (ev) => {
         try {
           const swap: Swap = JSON.parse(ev.data);
-          if (seenSigs.has(swap.signature)) return;
+          if (seenSigs.has(swap.signature)) {
+            // Enrichment update — replace existing swap with updated data
+            if (swap.amounts_from_inner) {
+              setSwaps((prev) =>
+                prev.map((s) => (s.signature === swap.signature ? swap : s))
+              );
+            }
+            return;
+          }
           seenSigs.add(swap.signature);
           if (seenSigs.size > 200) seenSigs.clear();
           setSwaps((prev) => [swap, ...prev].slice(0, 50));
