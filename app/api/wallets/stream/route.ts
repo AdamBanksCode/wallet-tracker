@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DECODER_URL =
-  process.env.DECODER_URL || "http://20.52.113.255:9110";
+  process.env.DECODER_URL || "http://20.52.113.255:9109";
 
 export async function GET() {
   const upstream = `${DECODER_URL}/v1/wallets/stream`;
