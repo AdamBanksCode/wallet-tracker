@@ -4,8 +4,12 @@ export const dynamic = "force-dynamic";
 const DECODER_URL =
   process.env.DECODER_URL || "http://20.52.113.255:9109";
 
-export async function GET() {
-  const upstream = `${DECODER_URL}/api/paper/stream`;
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ trader: string }> }
+) {
+  const { trader } = await params;
+  const upstream = `${DECODER_URL}/api/paper/${trader}/stream`;
 
   const resp = await fetch(upstream, {
     headers: { Accept: "text/event-stream" },
