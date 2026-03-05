@@ -39,6 +39,8 @@ interface Trade {
   priceImpact: number;
   feeUsd: number;
   sellPct: number | null;
+  idealTradePnl: number;
+  pessTradePnl: number;
   idealBalance: number;
   idealPnl: number;
   pessBalance: number;
@@ -265,16 +267,16 @@ function TraderCard({ traderId }: { traderId: string }) {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-muted-foreground">
-                        imp:{(t.priceImpact * 100).toFixed(2)}%
+                        imp:{t.priceImpact.toFixed(2)}%
                       </span>
                       <span className="text-muted-foreground">
                         fee:{usd(t.feeUsd)}
                       </span>
-                      <span className={pnlColor(t.idealPnl)}>
-                        I:{pnlSign(t.idealPnl)}{usd(t.idealPnl)}
+                      <span className={pnlColor(t.idealTradePnl)}>
+                        I:{pnlSign(t.idealTradePnl)}{usd(t.idealTradePnl)}
                       </span>
-                      <span className={pnlColor(t.pessPnl)}>
-                        P:{pnlSign(t.pessPnl)}{usd(t.pessPnl)}
+                      <span className={pnlColor(t.pessTradePnl)}>
+                        P:{pnlSign(t.pessTradePnl)}{usd(t.pessTradePnl)}
                       </span>
                       <span className="text-muted-foreground">
                         {timeAgo(t.time)}
