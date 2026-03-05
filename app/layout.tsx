@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Wallet Tracker",
-  description: "Real-time shred-decoded wallet swap tracker",
+  description: "Real-time wallet swap tracker for copy trading",
 };
 
 export default function RootLayout({

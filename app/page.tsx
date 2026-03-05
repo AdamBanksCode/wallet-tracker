@@ -11,7 +11,7 @@ export default function Home() {
               Wallet Tracker
             </h1>
             <p className="text-xs text-muted-foreground">
-              Shred-decoded swap feed — ahead of on-chain confirmation
+              Real-time wallet swap feed
             </p>
           </div>
           <ThemeToggle />

@@ -5,50 +5,51 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
+interface TokenInfo {
+  name: string;
+  symbol: string;
+  address: string;
+  decimals: number;
+  amount: number;
+  image?: string;
+  price?: { usd: number };
+}
 
 interface Swap {
-  signature: string;
-  slot: number;
+  tx: string;
+  type: string;
+  wallet: string;
   program: string;
-  signer: string;
-  direction: string;
-  token_in_mint: string | null;
-  token_out_mint: string | null;
-  amount_in: number | null;
-  amount_out: number | null;
-  pool: string | null;
-  priority_fee_micro_lamports: number | null;
-  tip_lamports: number | null;
-  tip_provider: string | null;
-  detected_at_ms: number;
-  tracked_at_ms: number;
-  decode_to_track_ms: number;
-  slots_ahead: number;
-  estimated_ahead_ms: number;
-  amounts_from_inner: boolean;
+  time: number;
+  from: {
+    address: string;
+    amount: number;
+    token: TokenInfo;
+  };
+  to: {
+    address: string;
+    amount: number;
+    token: TokenInfo;
+  };
+  volume: { usd: number; sol: number };
+  price: { usd: number };
+  pools: string[];
 }
 
-function tokenMint(swap: Swap): string {
-  const tin = swap.token_in_mint;
-  const tout = swap.token_out_mint;
-  if (tin === SOL_MINT && tout) return tout;
-  if (tout === SOL_MINT && tin) return tin;
-  if (tin && tout) return `${tin} → ${tout}`;
-  return tin || tout || "unknown";
+function formatUsd(val: number): string {
+  if (val >= 1000) return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (val >= 1) return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return "$" + val.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-function formatAmount(val: number | null, mint: string | null): string {
-  if (val === null) return "—";
-  // SOL uses 9 decimals, most SPL tokens use 6
-  if (mint === SOL_MINT) {
-    return (val / 1e9).toLocaleString(undefined, { maximumFractionDigits: 4 }) + " SOL";
-  }
-  // For SPL tokens, assume 6 decimals (pump tokens, most memecoins)
-  if (val > 1e9) {
-    return (val / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 });
-  }
-  return val.toLocaleString();
+function formatAmount(val: number): string {
+  if (val >= 1_000_000) return (val / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "M";
+  if (val >= 1_000) return (val / 1_000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "K";
+  return val.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatSol(val: number): string {
+  return val.toLocaleString(undefined, { maximumFractionDigits: 4 }) + " SOL";
 }
 
 function formatTime(ms: number): string {
@@ -64,75 +65,111 @@ function AgeCounter({ detectedAt }: { detectedAt: number }) {
     return () => clearInterval(iv);
   }, [detectedAt]);
   if (age < 60) return <span>{age}s</span>;
-  return (
-    <span>
-      {Math.floor(age / 60)}m{age % 60}s
-    </span>
-  );
+  return <span>{Math.floor(age / 60)}m{age % 60}s</span>;
 }
 
 function SwapCard({ swap }: { swap: Swap }) {
-  const isBuy = swap.direction.toLowerCase() === "buy";
-  const token = tokenMint(swap);
+  const isBuy = swap.type === "buy";
+  const solSide = isBuy ? swap.from : swap.to;
+  const tokenSide = isBuy ? swap.to : swap.from;
+  const token = tokenSide.token;
+  const solAmount = solSide.amount;
 
   return (
-    <Card className="border-l-4 transition-all duration-300 animate-in fade-in slide-in-from-top-2"
-      style={{ borderLeftColor: isBuy ? "var(--color-chart-2)" : "var(--color-destructive)" }}>
+    <Card
+      className="border-l-4 transition-all duration-300 animate-in fade-in slide-in-from-top-2"
+      style={{ borderLeftColor: isBuy ? "var(--color-chart-2)" : "var(--color-destructive)" }}
+    >
       <CardContent className="p-4 space-y-2">
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Badge variant={isBuy ? "default" : "destructive"} className="text-xs font-bold">
-              {isBuy ? "▲ BUY" : "▼ SELL"}
+              {isBuy ? "BUY" : "SELL"}
             </Badge>
             <span className="text-xs text-muted-foreground">{swap.program}</span>
+            <span className="text-xs font-semibold text-green-500">{formatUsd(swap.volume.usd)}</span>
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{formatTime(swap.detected_at_ms)}</span>
-            <span className="text-green-500 font-medium">
-              ~{swap.estimated_ahead_ms}ms ahead
-            </span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{formatTime(swap.time)}</span>
+            <AgeCounter detectedAt={swap.time} />
           </div>
         </div>
 
-        {/* Token address */}
+        {/* Token info */}
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground shrink-0">Token:</span>
-          <code className="text-xs font-bold text-amber-500 dark:text-amber-400 break-all select-all cursor-pointer">
-            {token}
-          </code>
+          {token.image && (
+            <img
+              src={token.image}
+              alt={token.symbol}
+              className="w-5 h-5 rounded-full"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          )}
+          <span className="text-sm font-bold">{token.name}</span>
+          <span className="text-xs text-muted-foreground">{token.symbol}</span>
         </div>
+
+        {/* Contract address */}
+        <code className="text-[10px] text-amber-500 dark:text-amber-400 break-all select-all cursor-pointer block">
+          {token.address}
+        </code>
 
         <Separator />
 
-        {/* Details grid */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        {/* Swap details */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
           <div>
-            <span className="text-muted-foreground">In: </span>
-            <span className="font-medium">{formatAmount(swap.amount_in, swap.token_in_mint)}</span>
-            {swap.amounts_from_inner && <span className="text-green-500 ml-1" title="Verified on-chain">✓</span>}
+            <span className="text-muted-foreground">{isBuy ? "Spent: " : "Sold: "}</span>
+            <span className="font-semibold">
+              {isBuy ? formatSol(solAmount) : formatAmount(swap.from.amount) + " " + swap.from.token.symbol}
+            </span>
           </div>
           <div>
-            <span className="text-muted-foreground">Out: </span>
-            <span className="font-medium">{formatAmount(swap.amount_out, swap.token_out_mint)}</span>
+            <span className="text-muted-foreground">{isBuy ? "Got: " : "Got: "}</span>
+            <span className="font-semibold">
+              {isBuy ? formatAmount(swap.to.amount) + " " + swap.to.token.symbol : formatSol(solAmount)}
+            </span>
           </div>
           <div>
-            <span className="text-muted-foreground">Slot: </span>
-            <span className="font-medium">{swap.slot}</span>
+            <span className="text-muted-foreground">Price: </span>
+            <span className="font-medium">{formatUsd(swap.price.usd)}</span>
           </div>
           <div>
-            <span className="text-muted-foreground">Latency: </span>
-            <span className="font-medium">{swap.decode_to_track_ms}ms</span>
+            <span className="text-muted-foreground">MCap: </span>
+            <span className="font-medium">
+              {token.price?.usd
+                ? formatUsd(token.price.usd * (10 ** token.decimals > 1e9 ? 1e9 : 10 ** token.decimals))
+                : "—"}
+            </span>
           </div>
+          <div>
+            <span className="text-muted-foreground">Volume: </span>
+            <span className="font-medium">{formatSol(swap.volume.sol)}</span>
+          </div>
+          {swap.pools[0] && (
+            <div>
+              <span className="text-muted-foreground">Pool: </span>
+              <span className="font-medium truncate" title={swap.pools[0]}>
+                {swap.pools[0].slice(0, 8)}...
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="truncate max-w-[200px]" title={swap.signature}>
-            Sig: {swap.signature.slice(0, 24)}...
-          </span>
+        {/* Signature */}
+        <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1">
+          <a
+            href={`https://solscan.io/tx/${swap.tx}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors truncate max-w-[240px]"
+            title={swap.tx}
+          >
+            {swap.tx.slice(0, 32)}...
+          </a>
           <span className="font-medium text-foreground">
-            Age: <AgeCounter detectedAt={swap.detected_at_ms} />
+            <AgeCounter detectedAt={swap.time} /> ago
           </span>
         </div>
       </CardContent>
@@ -143,37 +180,32 @@ function SwapCard({ swap }: { swap: Swap }) {
 export default function SwapFeed() {
   const [swaps, setSwaps] = useState<Swap[]>([]);
   const [connected, setConnected] = useState(false);
-  const [stats, setStats] = useState({ total: 0, avgLatency: 0 });
+  const [stats, setStats] = useState({ total: 0, totalVolume: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let es: EventSource | null = null;
-    const seenSigs = new Set<string>();
+    const seenTxs = new Set<string>();
 
     function connect() {
       es = new EventSource("/api/wallets/stream");
       es.onopen = () => setConnected(true);
       es.onmessage = (ev) => {
         try {
-          const swap: Swap = JSON.parse(ev.data);
-          if (seenSigs.has(swap.signature)) {
-            // Enrichment update — replace existing swap with updated data
-            if (swap.amounts_from_inner) {
-              setSwaps((prev) =>
-                prev.map((s) => (s.signature === swap.signature ? swap : s))
-              );
-            }
-            return;
-          }
-          seenSigs.add(swap.signature);
-          if (seenSigs.size > 200) seenSigs.clear();
+          const data = JSON.parse(ev.data);
+
+          // Skip pings and connection messages
+          if (data === "ping" || data.type === "connected") return;
+
+          const swap: Swap = data;
+          if (!swap.tx || seenTxs.has(swap.tx)) return;
+          seenTxs.add(swap.tx);
+          if (seenTxs.size > 200) seenTxs.clear();
+
           setSwaps((prev) => [swap, ...prev].slice(0, 50));
           setStats((prev) => ({
             total: prev.total + 1,
-            avgLatency: Math.round(
-              (prev.avgLatency * prev.total + swap.decode_to_track_ms) /
-                (prev.total + 1)
-            ),
+            totalVolume: prev.totalVolume + (swap.volume?.usd || 0),
           }));
         } catch {}
       };
@@ -190,7 +222,7 @@ export default function SwapFeed() {
 
   return (
     <div className="space-y-3" ref={scrollRef}>
-      {/* Connection status */}
+      {/* Status bar */}
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
           <div
@@ -199,23 +231,23 @@ export default function SwapFeed() {
             }`}
           />
           <span className="text-muted-foreground">
-            {connected ? "Connected to shred decoder" : "Reconnecting..."}
+            {connected ? "Live — SolanaTracker DataStream" : "Reconnecting..."}
           </span>
         </div>
         <div className="flex items-center gap-4 text-muted-foreground">
-          <span>Swaps: {stats.total}</span>
-          <span>Avg: {stats.avgLatency}ms</span>
+          <span>Trades: {stats.total}</span>
+          <span>Vol: {formatUsd(stats.totalVolume)}</span>
         </div>
       </div>
 
-      {/* Swap list */}
+      {/* Trade list */}
       {swaps.length === 0 && (
         <div className="text-center text-muted-foreground py-12 text-sm">
-          Waiting for swaps from tracked wallets...
+          Waiting for trades from tracked wallets...
         </div>
       )}
       {swaps.map((swap) => (
-        <SwapCard key={swap.signature} swap={swap} />
+        <SwapCard key={swap.tx} swap={swap} />
       ))}
     </div>
   );
