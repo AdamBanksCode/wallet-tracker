@@ -37,6 +37,41 @@ interface BackfillData {
   solPriceUsd: number;
 }
 
+// ─── SolanaTracker PNL Types ─────────────────────────────────────────────────
+
+interface STPnlHistoricPeriod {
+  totalPnL: number;
+  realizedChange: number;
+  unrealizedChange: number;
+  totalChange: number;
+  percentageChange: number;
+  wins: number;
+  losses: number;
+  winPercentage: number;
+  lossPercentage: number;
+}
+
+interface STPnlData {
+  summary: {
+    realized: number;
+    unrealized: number;
+    total: number;
+    totalInvested: number;
+    totalWins: number;
+    totalLosses: number;
+    averageBuyAmount: number;
+    winPercentage: number;
+    lossPercentage: number;
+  };
+  historic?: {
+    summary: {
+      "1d"?: STPnlHistoricPeriod;
+      "7d"?: STPnlHistoricPeriod;
+      "30d"?: STPnlHistoricPeriod;
+    };
+  };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 const TRADERS = [
@@ -448,21 +483,31 @@ export default function CopyAnalyzer() {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("30d");
   const [minProfitPct, setMinProfitPct] = useState(0); // 0 = off, 15 = skip trades where their P&L < 15%
   const [data, setData] = useState<BackfillData | null>(null);
+  const [stPnl, setStPnl] = useState<STPnlData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({}); // tokenMint -> current price in SOL
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setLoading(true);
     setError(null);
     setData(null);
-    fetch(`/api/analysis/${selected}`)
-      .then((r) => {
-        if (!r.ok) throw new Error("No data yet — run backfill");
-        return r.json();
-      })
-      .then((d) => {
-        setData(d);
+    setStPnl(null);
+
+    const trader = TRADERS.find((t) => t.id === selected);
+
+    // Fetch backfill data (for copy simulation) and ST PNL (for accurate their-actual) in parallel
+    Promise.all([
+      fetch(`/api/analysis/${selected}`).then((r) => r.ok ? r.json() : null),
+      fetch(`/api/pnl/${trader?.addr}`).then((r) => r.ok ? r.json() : null),
+    ])
+      .then(([backfill, pnl]) => {
+        if (!backfill) {
+          setError("No backfill data — run backfill script");
+        } else {
+          setData(backfill);
+        }
+        if (pnl) setStPnl(pnl);
         setLoading(false);
       })
       .catch((err) => {
@@ -550,28 +595,45 @@ export default function CopyAnalyzer() {
     return buildChartData(filteredSwaps, solPrice);
   }, [filteredSwaps, solPrice]);
 
+  // Use SolanaTracker for "Their Actual" P&L (full history, accurate)
+  // Map time filter to ST historic period key
+  const stPeriodKey = timeFilter === "7d" ? "7d" : timeFilter === "30d" ? "30d" : null;
+  const stPeriod = stPnl?.historic?.summary?.[stPeriodKey as "7d" | "30d"] ?? null;
+
   const stats = useMemo(() => {
     if (trips.length === 0) return null;
     const completedOnly = trips.filter((t) => !t.isOpen);
-    const realizedSol = completedOnly.reduce((s, t) => s + t.theirPnlSol, 0);
 
-    // Also account for sell-only tokens (bought before window, sold within it)
-    const tripMints = new Set(trips.map((t) => t.tokenMint));
-    const sellOnlySol = filteredSwaps
-      .filter((s) => s.type === "sell" && !tripMints.has(s.tokenMint))
-      .reduce((s, t) => s + t.solAmount, 0);
-
-    const their = {
-      realizedSol: realizedSol + sellOnlySol,
-      realizedUsd: (realizedSol + sellOnlySol) * solPrice,
-      unrealizedSol: unrealized.theirUnrealizedSol,
-      unrealizedUsd: unrealized.theirUnrealizedUsd,
-      totalSol: realizedSol + sellOnlySol + unrealized.theirUnrealizedSol,
-      totalUsd: (realizedSol + sellOnlySol + unrealized.theirUnrealizedSol) * solPrice,
-      totalBuySol: filteredSwaps.filter((s) => s.type === "buy").reduce((a, s) => a + s.solAmount, 0),
-      totalSellSol: filteredSwaps.filter((s) => s.type === "sell").reduce((a, s) => a + s.solAmount, 0),
-      deployedSol: unrealized.deployedSol,
+    // Their Actual — use SolanaTracker data (full on-chain history) when available
+    const their = stPnl ? {
+      // All-time totals from ST
+      realizedUsd: stPnl.summary.realized,
+      unrealizedUsd: stPnl.summary.unrealized,
+      totalUsd: stPnl.summary.total,
+      totalInvestedUsd: stPnl.summary.totalInvested,
+      // Period-specific from ST historic
+      periodRealizedUsd: stPeriod?.realizedChange ?? null,
+      periodUnrealizedUsd: stPeriod?.unrealizedChange ?? null,
+      periodTotalUsd: stPeriod?.totalChange ?? null,
+      periodWins: stPeriod?.wins ?? stPnl.summary.totalWins,
+      periodLosses: stPeriod?.losses ?? stPnl.summary.totalLosses,
+      periodWinPct: stPeriod?.winPercentage ?? stPnl.summary.winPercentage,
+      source: "solanatracker" as const,
+    } : {
+      // Fallback to backfill estimate
+      realizedUsd: 0,
+      unrealizedUsd: 0,
+      totalUsd: 0,
+      totalInvestedUsd: 0,
+      periodRealizedUsd: null as number | null,
+      periodUnrealizedUsd: null as number | null,
+      periodTotalUsd: null as number | null,
+      periodWins: 0,
+      periodLosses: 0,
+      periodWinPct: 0,
+      source: "backfill" as const,
     };
+
     return {
       totalSwaps: filteredSwaps.length,
       totalBuys: filteredSwaps.filter((s) => s.type === "buy").length,
@@ -587,7 +649,7 @@ export default function CopyAnalyzer() {
       s4: computeStats(trips, solPrice, "slot4"),
       totalFeesSol: trips.reduce((s, t) => s + t.totalFeesSol, 0),
     };
-  }, [trips, filteredSwaps, solPrice, unrealized]);
+  }, [trips, filteredSwaps, solPrice, stPnl, stPeriod]);
 
   // Thin-margin breakdown: how many completed trips are below the threshold
   // and what's the damage from copying those trades
@@ -706,9 +768,19 @@ export default function CopyAnalyzer() {
                 )}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
-                Their total P&L: <span className={pnlColor(stats.their.totalUsd)}>{sign(stats.their.totalUsd)}{$(stats.their.totalUsd)}</span>
-                {" "}(realized {sign(stats.their.realizedUsd)}{$(stats.their.realizedUsd)} + unrealized {sign(stats.their.unrealizedUsd)}{$(stats.their.unrealizedUsd)}
-                {unrealized.pricedCount < unrealized.openCount && `, ${unrealized.pricedCount}/${unrealized.openCount} priced`})
+                {stats.their.periodTotalUsd != null ? (
+                  <>
+                    Their {timeFilter} P&L: <span className={pnlColor(stats.their.periodTotalUsd)}>{sign(stats.their.periodTotalUsd)}{$(stats.their.periodTotalUsd)}</span>
+                    {" "}(realized {sign(stats.their.periodRealizedUsd!)}{$(stats.their.periodRealizedUsd!)} + unrealized {sign(stats.their.periodUnrealizedUsd!)}{$(stats.their.periodUnrealizedUsd!)})
+                    {" "}| {stats.their.periodWins}W/{stats.their.periodLosses}L ({stats.their.periodWinPct.toFixed(0)}%)
+                  </>
+                ) : (
+                  <>
+                    Their all-time: <span className={pnlColor(stats.their.totalUsd)}>{sign(stats.their.totalUsd)}{$(stats.their.totalUsd)}</span>
+                    {" "}(realized {sign(stats.their.realizedUsd)}{$(stats.their.realizedUsd)})
+                  </>
+                )}
+                {stats.their.source === "solanatracker" && <span className="text-[8px] text-green-600 dark:text-green-500 ml-1">via SolanaTracker</span>}
               </div>
               {data && (
                 <div className="text-[9px] text-muted-foreground mt-1">
@@ -719,33 +791,46 @@ export default function CopyAnalyzer() {
 
             {/* 5 scenario cards: Their actual + 4 copy scenarios */}
             <div className="grid grid-cols-5 gap-2">
-              {(() => {
-                const cards: { label: string; sub: string; color: string; netSol: number; netUsd: number; ss: ScenarioStats | null }[] = [
-                  { label: "THEIR ACTUAL", sub: "realized + unrealized", color: "text-purple-600 dark:text-purple-400", netSol: stats.their.totalSol, netUsd: stats.their.totalUsd, ss: null },
-                  { label: "OUR COPY (IDEAL)", sub: "0 delay, no fees", color: "text-blue-600 dark:text-blue-400", netSol: stats.ideal.netSol, netUsd: stats.ideal.netUsd, ss: stats.ideal },
-                  { label: "+1 SLOT", sub: "~400ms delay", color: "text-amber-600 dark:text-amber-400", netSol: stats.s1.netSol, netUsd: stats.s1.netUsd, ss: stats.s1 },
-                  { label: "+2 SLOTS", sub: "~800ms delay", color: "text-orange-600 dark:text-orange-400", netSol: stats.s2.netSol, netUsd: stats.s2.netUsd, ss: stats.s2 },
-                  { label: "+4 SLOTS", sub: "~1.6s delay", color: "text-red-600 dark:text-red-400", netSol: stats.s4.netSol, netUsd: stats.s4.netUsd, ss: stats.s4 },
-                ];
-                return cards.map(({ label, sub, color, netSol, netUsd, ss }, idx) => (
-                  <div key={label} className="border border-border rounded p-2 text-[11px]">
-                    <div className={`text-[9px] font-bold mb-1 ${color}`}>{label}</div>
-                    <div className="text-[10px] text-muted-foreground mb-1.5">{sub}</div>
-                    <Metric label="Total P&L" v={`${sign(netUsd)}${$(netUsd)}`} pnl={netUsd} />
-                    <Metric label="In SOL" v={`${sign(netSol)}${netSol.toFixed(2)}`} pnl={netSol} />
-                    {idx === 0 && (
-                      <>
-                        <Metric label="Realized" v={`${sign(stats.their.realizedUsd)}${$(stats.their.realizedUsd)}`} pnl={stats.their.realizedSol} />
-                        <Metric label="Unrealized" v={`${sign(stats.their.unrealizedUsd)}${$(stats.their.unrealizedUsd)}`} pnl={stats.their.unrealizedSol} />
-                        <Metric label="Deployed" v={`${stats.their.deployedSol.toFixed(1)} SOL`} />
-                      </>
-                    )}
-                    {ss && <Metric label="Win Rate" v={`${ss.winRate.toFixed(0)}% (${ss.wins}W/${ss.losses}L)`} />}
-                    {ss && <Metric label="PF" v={ss.pf === Infinity ? "INF" : ss.pf.toFixed(2)} />}
-                    {ss && <Metric label="EV/Trade" v={`${sign(ss.evSol * solPrice)}${$(ss.evSol * solPrice)}`} pnl={ss.evSol} />}
-                  </div>
-                ));
-              })()}
+              {/* Their Actual — from SolanaTracker */}
+              <div className="border border-border rounded p-2 text-[11px]">
+                <div className="text-[9px] font-bold mb-1 text-purple-600 dark:text-purple-400">THEIR ACTUAL</div>
+                <div className="text-[10px] text-muted-foreground mb-1.5">
+                  {stats.their.source === "solanatracker" ? "via SolanaTracker" : "backfill est."}
+                </div>
+                {stats.their.periodTotalUsd != null ? (
+                  <>
+                    <Metric label={`${timeFilter} P&L`} v={`${sign(stats.their.periodTotalUsd)}${$(stats.their.periodTotalUsd)}`} pnl={stats.their.periodTotalUsd} />
+                    <Metric label="Realized" v={`${sign(stats.their.periodRealizedUsd!)}${$(stats.their.periodRealizedUsd!)}`} pnl={stats.their.periodRealizedUsd!} />
+                    <Metric label="Unrealized" v={`${sign(stats.their.periodUnrealizedUsd!)}${$(stats.their.periodUnrealizedUsd!)}`} pnl={stats.their.periodUnrealizedUsd!} />
+                    <Metric label="Win Rate" v={`${stats.their.periodWinPct.toFixed(0)}% (${stats.their.periodWins}W/${stats.their.periodLosses}L)`} />
+                  </>
+                ) : (
+                  <>
+                    <Metric label="All-time" v={`${sign(stats.their.totalUsd)}${$(stats.their.totalUsd)}`} pnl={stats.their.totalUsd} />
+                    <Metric label="Realized" v={`${sign(stats.their.realizedUsd)}${$(stats.their.realizedUsd)}`} pnl={stats.their.realizedUsd} />
+                    <Metric label="Unrealized" v={`${sign(stats.their.unrealizedUsd)}${$(stats.their.unrealizedUsd)}`} pnl={stats.their.unrealizedUsd} />
+                    <Metric label="Win Rate" v={`${stats.their.periodWinPct.toFixed(0)}%`} />
+                  </>
+                )}
+                <Metric label="Invested" v={$(stats.their.totalInvestedUsd)} />
+              </div>
+              {/* Copy scenarios */}
+              {([
+                { label: "OUR COPY (IDEAL)", sub: "0 delay, no fees", color: "text-blue-600 dark:text-blue-400", ss: stats.ideal },
+                { label: "+1 SLOT", sub: "~400ms delay", color: "text-amber-600 dark:text-amber-400", ss: stats.s1 },
+                { label: "+2 SLOTS", sub: "~800ms delay", color: "text-orange-600 dark:text-orange-400", ss: stats.s2 },
+                { label: "+4 SLOTS", sub: "~1.6s delay", color: "text-red-600 dark:text-red-400", ss: stats.s4 },
+              ]).map(({ label, sub, color, ss }) => (
+                <div key={label} className="border border-border rounded p-2 text-[11px]">
+                  <div className={`text-[9px] font-bold mb-1 ${color}`}>{label}</div>
+                  <div className="text-[10px] text-muted-foreground mb-1.5">{sub}</div>
+                  <Metric label="Net P&L" v={`${sign(ss.netUsd)}${$(ss.netUsd)}`} pnl={ss.netUsd} />
+                  <Metric label="In SOL" v={`${sign(ss.netSol)}${ss.netSol.toFixed(2)}`} pnl={ss.netSol} />
+                  <Metric label="Win Rate" v={`${ss.winRate.toFixed(0)}% (${ss.wins}W/${ss.losses}L)`} />
+                  <Metric label="PF" v={ss.pf === Infinity ? "INF" : ss.pf.toFixed(2)} />
+                  <Metric label="EV/Trade" v={`${sign(ss.evSol * solPrice)}${$(ss.evSol * solPrice)}`} pnl={ss.evSol} />
+                </div>
+              ))}
             </div>
 
             {/* Cost summary */}
