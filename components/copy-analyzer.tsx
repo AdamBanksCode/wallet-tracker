@@ -315,13 +315,11 @@ function buildChartData(swaps: BackfillSwap[], solPrice: number): ChartPoint[] {
   const maxSol = Math.min(COPY_SIZE_SOL, MAX_COPY_USD / solPrice);
   const firstBuySeen = new Set<string>();
 
+  // Simple net SOL flow per swap — buys subtract, sells add
   let theirCum = 0;
   let idealCum = 0;
   const slotCums: Record<number, number> = { 1: 0, 2: 0, 4: 0 };
   const points: ChartPoint[] = [];
-
-  // Track per-token cost basis so we only realize P&L on sells
-  const costBasis: Record<string, { theirSol: number; ourSol: number; slotCosts: Record<number, number> }> = {};
 
   for (const swap of sorted) {
     const ourBase = Math.min(swap.solAmount, maxSol);
@@ -329,46 +327,20 @@ function buildChartData(swaps: BackfillSwap[], solPrice: number): ChartPoint[] {
     if (isFirst) firstBuySeen.add(swap.tokenMint);
 
     if (swap.type === "buy") {
-      // Accumulate cost basis — don't count as P&L yet
-      if (!costBasis[swap.tokenMint]) {
-        costBasis[swap.tokenMint] = { theirSol: 0, ourSol: 0, slotCosts: { 1: 0, 2: 0, 4: 0 } };
-      }
-      costBasis[swap.tokenMint].theirSol += swap.solAmount;
-      costBasis[swap.tokenMint].ourSol += ourBase;
+      // SOL goes out
+      theirCum -= swap.solAmount;
+      idealCum -= ourBase;
       for (const slots of [1, 2, 4]) {
         const r = computeSlotScenario(swap, slots, solPrice, isFirst);
-        costBasis[swap.tokenMint].slotCosts[slots] += r.ourEntrySol;
+        slotCums[slots] -= r.ourEntrySol;
       }
     } else {
-      // Sell: realize P&L proportional to what was sold
-      const basis = costBasis[swap.tokenMint];
-      if (basis && basis.theirSol > 0) {
-        // What fraction of their position is being sold
-        const frac = Math.min(1, swap.solAmount / basis.theirSol);
-
-        // Their realized P&L: sell proceeds - proportional cost
-        theirCum += swap.solAmount - basis.theirSol * frac;
-        idealCum += ourBase - basis.ourSol * frac;
-
-        for (const slots of [1, 2, 4]) {
-          const r = computeSlotScenario(swap, slots, solPrice, false);
-          slotCums[slots] += r.ourExitSol - basis.slotCosts[slots] * frac;
-        }
-
-        // Reduce cost basis
-        basis.theirSol *= (1 - frac);
-        basis.ourSol *= (1 - frac);
-        for (const slots of [1, 2, 4]) {
-          basis.slotCosts[slots] *= (1 - frac);
-        }
-      } else {
-        // No cost basis (sold without tracked buy) — count as pure profit
-        theirCum += swap.solAmount;
-        idealCum += ourBase;
-        for (const slots of [1, 2, 4]) {
-          const r = computeSlotScenario(swap, slots, solPrice, false);
-          slotCums[slots] += r.ourExitSol;
-        }
+      // SOL comes back
+      theirCum += swap.solAmount;
+      idealCum += ourBase;
+      for (const slots of [1, 2, 4]) {
+        const r = computeSlotScenario(swap, slots, solPrice, false);
+        slotCums[slots] += r.ourExitSol;
       }
     }
 
@@ -582,15 +554,22 @@ export default function CopyAnalyzer() {
     if (trips.length === 0) return null;
     const completedOnly = trips.filter((t) => !t.isOpen);
     const realizedSol = completedOnly.reduce((s, t) => s + t.theirPnlSol, 0);
+
+    // Also account for sell-only tokens (bought before window, sold within it)
+    const tripMints = new Set(trips.map((t) => t.tokenMint));
+    const sellOnlySol = filteredSwaps
+      .filter((s) => s.type === "sell" && !tripMints.has(s.tokenMint))
+      .reduce((s, t) => s + t.solAmount, 0);
+
     const their = {
-      realizedSol,
-      realizedUsd: realizedSol * solPrice,
+      realizedSol: realizedSol + sellOnlySol,
+      realizedUsd: (realizedSol + sellOnlySol) * solPrice,
       unrealizedSol: unrealized.theirUnrealizedSol,
       unrealizedUsd: unrealized.theirUnrealizedUsd,
-      totalSol: realizedSol + unrealized.theirUnrealizedSol,
-      totalUsd: (realizedSol + unrealized.theirUnrealizedSol) * solPrice,
-      totalBuySol: completedOnly.reduce((s, t) => s + t.theirBuySol, 0),
-      totalSellSol: completedOnly.reduce((s, t) => s + t.theirSellSol, 0),
+      totalSol: realizedSol + sellOnlySol + unrealized.theirUnrealizedSol,
+      totalUsd: (realizedSol + sellOnlySol + unrealized.theirUnrealizedSol) * solPrice,
+      totalBuySol: filteredSwaps.filter((s) => s.type === "buy").reduce((a, s) => a + s.solAmount, 0),
+      totalSellSol: filteredSwaps.filter((s) => s.type === "sell").reduce((a, s) => a + s.solAmount, 0),
       deployedSol: unrealized.deployedSol,
     };
     return {
