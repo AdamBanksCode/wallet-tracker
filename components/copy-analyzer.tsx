@@ -502,37 +502,14 @@ export default function CopyAnalyzer() {
     return buildRoundTrips(filteredSwaps, solPrice);
   }, [filteredSwaps, solPrice]);
 
-  // Filter out trips where the trader's profit % is below the min threshold
-  // This handles the IDPT problem: tiny-margin trades that can't be copied profitably
-  const copyableTrips = useMemo(() => {
-    if (minProfitPct === 0) return trips;
-    return trips.map((t) => {
-      if (t.isOpen) return t; // keep open trips as-is (they're excluded from stats anyway)
-      if (t.theirPnlPct >= minProfitPct) return t; // passes filter
-      return null; // skip: their margin too thin to copy
-    }).filter(Boolean) as RoundTrip[];
-  }, [trips, minProfitPct]);
-
-  // For the chart, filter out swaps belonging to tokens that failed the min profit filter
-  const copyableSwaps = useMemo(() => {
-    if (minProfitPct === 0) return filteredSwaps;
-    const copyableTokens = new Set(copyableTrips.map((t) => t.tokenMint));
-    return filteredSwaps.filter((s) => copyableTokens.has(s.tokenMint));
-  }, [filteredSwaps, copyableTrips, minProfitPct]);
-
-  const skippedTrips = useMemo(() => {
-    if (minProfitPct === 0) return 0;
-    return trips.filter((t) => !t.isOpen && t.theirPnlPct < minProfitPct).length;
-  }, [trips, minProfitPct]);
-
   const chartData = useMemo(() => {
-    if (copyableSwaps.length === 0) return [];
-    return buildChartData(copyableSwaps, solPrice);
-  }, [copyableSwaps, solPrice]);
+    if (filteredSwaps.length === 0) return [];
+    return buildChartData(filteredSwaps, solPrice);
+  }, [filteredSwaps, solPrice]);
 
   const stats = useMemo(() => {
-    if (copyableTrips.length === 0) return null;
-    const completedOnly = copyableTrips.filter((t) => !t.isOpen);
+    if (trips.length === 0) return null;
+    const completedOnly = trips.filter((t) => !t.isOpen);
     const their = {
       // Only count completed round trips — open positions are NOT losses
       netSol: completedOnly.reduce((s, t) => s + t.theirPnlSol, 0),
@@ -540,23 +517,48 @@ export default function CopyAnalyzer() {
       totalSellSol: completedOnly.reduce((s, t) => s + t.theirSellSol, 0),
     };
     return {
-      totalSwaps: copyableSwaps.length,
-      totalBuys: copyableSwaps.filter((s) => s.type === "buy").length,
-      totalSells: copyableSwaps.filter((s) => s.type === "sell").length,
-      uniqueTokens: new Set(copyableSwaps.map((s) => s.tokenMint)).size,
-      totalTrips: copyableTrips.length,
+      totalSwaps: filteredSwaps.length,
+      totalBuys: filteredSwaps.filter((s) => s.type === "buy").length,
+      totalSells: filteredSwaps.filter((s) => s.type === "sell").length,
+      uniqueTokens: new Set(filteredSwaps.map((s) => s.tokenMint)).size,
+      totalTrips: trips.length,
       completedTrips: completedOnly.length,
-      openTrips: copyableTrips.filter((t) => t.isOpen).length,
+      openTrips: trips.filter((t) => t.isOpen).length,
       their,
       theirNetUsd: their.netSol * solPrice,
-      ideal: computeStats(copyableTrips, solPrice, "ideal"),
-      s1: computeStats(copyableTrips, solPrice, "slot1"),
-      s2: computeStats(copyableTrips, solPrice, "slot2"),
-      s4: computeStats(copyableTrips, solPrice, "slot4"),
-      totalFeesSol: copyableTrips.reduce((s, t) => s + t.totalFeesSol, 0),
-      skippedTrips,
+      ideal: computeStats(trips, solPrice, "ideal"),
+      s1: computeStats(trips, solPrice, "slot1"),
+      s2: computeStats(trips, solPrice, "slot2"),
+      s4: computeStats(trips, solPrice, "slot4"),
+      totalFeesSol: trips.reduce((s, t) => s + t.totalFeesSol, 0),
     };
-  }, [copyableTrips, copyableSwaps, solPrice, skippedTrips]);
+  }, [trips, filteredSwaps, solPrice]);
+
+  // Thin-margin breakdown: how many completed trips are below the threshold
+  // and what's the damage from copying those trades
+  const thinMarginBreakdown = useMemo(() => {
+    if (minProfitPct === 0 || trips.length === 0) return null;
+    const completed = trips.filter((t) => !t.isOpen);
+    const thinTrips = completed.filter((t) => t.theirPnlPct < minProfitPct && t.theirPnlPct >= 0);
+    const lossingTrips = completed.filter((t) => t.theirPnlPct < 0);
+    const aboveTrips = completed.filter((t) => t.theirPnlPct >= minProfitPct);
+
+    return {
+      thinCount: thinTrips.length,
+      lossCount: lossingTrips.length,
+      aboveCount: aboveTrips.length,
+      totalCompleted: completed.length,
+      // What do thin-margin trades cost us at +1 slot?
+      thinOurLoss: thinTrips.reduce((s, t) => s + t.slot1.pnlSol, 0),
+      // Their loss trades cost us:
+      lossOurLoss: lossingTrips.reduce((s, t) => s + t.slot1.pnlSol, 0),
+      // Above-threshold trades earn us:
+      aboveOurGain: aboveTrips.reduce((s, t) => s + t.slot1.pnlSol, 0),
+      // Their P&L breakdown
+      thinTheirPnl: thinTrips.reduce((s, t) => s + t.theirPnlSol, 0),
+      aboveTheirPnl: aboveTrips.reduce((s, t) => s + t.theirPnlSol, 0),
+    };
+  }, [trips, minProfitPct]);
 
   // ─── Render ──────────────────────────────────────────────────────────
 
@@ -644,8 +646,8 @@ export default function CopyAnalyzer() {
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
                 at +1 slot delay ({COPY_SIZE_SOL} SOL/trade, fees + slippage) | {stats.completedTrips} completed round trips, {stats.openTrips} open
-                {stats.skippedTrips > 0 && (
-                  <span className="text-purple-600 dark:text-purple-400"> | {stats.skippedTrips} skipped (&lt;{minProfitPct}% their P&L)</span>
+                {thinMarginBreakdown && (
+                  <span className="text-purple-600 dark:text-purple-400"> | {thinMarginBreakdown.thinCount} thin-margin (&lt;{minProfitPct}% their P&L)</span>
                 )}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -699,6 +701,34 @@ export default function CopyAnalyzer() {
               ))}
             </div>
 
+            {/* Thin-margin breakdown */}
+            {thinMarginBreakdown && (
+              <div className="border border-purple-500/30 rounded p-3 bg-purple-500/5">
+                <div className="text-[10px] text-purple-600 dark:text-purple-400 font-bold uppercase mb-2">
+                  MARGIN BREAKDOWN — TRADES WHERE THEY MADE &lt;{minProfitPct}% PROFIT
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-[11px]">
+                  <div>
+                    <div className="text-muted-foreground text-[9px] mb-0.5">THIN MARGIN (&lt;{minProfitPct}%)</div>
+                    <div className="font-medium">{thinMarginBreakdown.thinCount} trips ({thinMarginBreakdown.totalCompleted > 0 ? ((thinMarginBreakdown.thinCount / thinMarginBreakdown.totalCompleted) * 100).toFixed(0) : 0}%)</div>
+                    <div className="text-[9px] text-muted-foreground">They made: <span className={pnlColor(thinMarginBreakdown.thinTheirPnl)}>{sign(thinMarginBreakdown.thinTheirPnl * solPrice)}{$(thinMarginBreakdown.thinTheirPnl * solPrice)}</span></div>
+                    <div className="text-[9px]">Our +1s P&L: <span className={`font-medium ${pnlColor(thinMarginBreakdown.thinOurLoss)}`}>{sign(thinMarginBreakdown.thinOurLoss * solPrice)}{$(thinMarginBreakdown.thinOurLoss * solPrice)}</span></div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground text-[9px] mb-0.5">THEIR LOSSES (negative P&L)</div>
+                    <div className="font-medium">{thinMarginBreakdown.lossCount} trips</div>
+                    <div className="text-[9px]">Our +1s P&L: <span className={`font-medium ${pnlColor(thinMarginBreakdown.lossOurLoss)}`}>{sign(thinMarginBreakdown.lossOurLoss * solPrice)}{$(thinMarginBreakdown.lossOurLoss * solPrice)}</span></div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground text-[9px] mb-0.5">ABOVE {minProfitPct}% PROFIT</div>
+                    <div className="font-medium">{thinMarginBreakdown.aboveCount} trips</div>
+                    <div className="text-[9px] text-muted-foreground">They made: <span className={pnlColor(thinMarginBreakdown.aboveTheirPnl)}>{sign(thinMarginBreakdown.aboveTheirPnl * solPrice)}{$(thinMarginBreakdown.aboveTheirPnl * solPrice)}</span></div>
+                    <div className="text-[9px]">Our +1s P&L: <span className={`font-medium ${pnlColor(thinMarginBreakdown.aboveOurGain)}`}>{sign(thinMarginBreakdown.aboveOurGain * solPrice)}{$(thinMarginBreakdown.aboveOurGain * solPrice)}</span></div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Chart */}
             <div>
               <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase mb-2">
@@ -710,7 +740,7 @@ export default function CopyAnalyzer() {
             {/* Round Trip Table */}
             <div>
               <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase mb-2">
-                ROUND TRIPS ({stats.completedTrips} completed, {stats.openTrips} open{stats.skippedTrips > 0 ? `, ${stats.skippedTrips} skipped` : ""})
+                ROUND TRIPS ({stats.completedTrips} completed, {stats.openTrips} open)
               </div>
               <div className="border border-border rounded overflow-hidden">
                 <div className="flex items-center text-[9px] text-muted-foreground border-b border-border uppercase font-medium bg-muted/30 px-3">
@@ -726,7 +756,7 @@ export default function CopyAnalyzer() {
                   <span className="w-14 text-right py-1.5">Hold</span>
                 </div>
                 <div className="max-h-72 overflow-y-auto">
-                  {copyableTrips.map((t) => {
+                  {trips.map((t) => {
                     const holdStr = t.holdDurationSec < 60 ? `${t.holdDurationSec}s` :
                       t.holdDurationSec < 3600 ? `${Math.floor(t.holdDurationSec / 60)}m` :
                       t.holdDurationSec < 86400 ? `${Math.floor(t.holdDurationSec / 3600)}h${Math.floor((t.holdDurationSec % 3600) / 60)}m` :
@@ -765,7 +795,7 @@ export default function CopyAnalyzer() {
             {/* Individual Trade Log */}
             <div>
               <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase mb-2">
-                TRADE LOG — THEIR ENTRY vs OUR DELAYED ENTRY ({copyableSwaps.length} swaps)
+                TRADE LOG — THEIR ENTRY vs OUR DELAYED ENTRY ({filteredSwaps.length} swaps)
               </div>
               <div className="border border-border rounded overflow-hidden">
                 <div className="flex items-center text-[9px] text-muted-foreground border-b border-border uppercase font-medium bg-muted/30 px-3">
@@ -780,7 +810,7 @@ export default function CopyAnalyzer() {
                   <span className="w-14 text-right py-1.5">Date</span>
                 </div>
                 <div className="max-h-56 overflow-y-auto">
-                  {copyableSwaps.slice(0, 200).map((swap, i) => {
+                  {filteredSwaps.slice(0, 200).map((swap, i) => {
                     const maxSol = Math.min(COPY_SIZE_SOL, MAX_COPY_USD / solPrice);
                     const ourBase = Math.min(swap.solAmount, maxSol);
                     const s1 = computeSlotScenario(swap, 1, solPrice, false);
