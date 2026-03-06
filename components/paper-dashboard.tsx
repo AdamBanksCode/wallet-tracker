@@ -63,6 +63,7 @@ interface Snapshot {
   totalFeesUsd: number;
   pessimisticPct?: number;
   slippagePct?: number;
+  slippageMode?: string;
   ideal: ScenarioData;
   pessimistic: ScenarioData;
   recentTrades: Trade[];
@@ -189,7 +190,7 @@ function SummaryTab({ snap }: { snap: Snapshot }) {
         {/* Pessimistic */}
         <div className="border-l-2 border-l-orange-500 pl-2">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Pessimistic (-{snap.slippagePct ?? snap.pessimisticPct}%)</span>
+            <span className="text-muted-foreground">Pessimistic ({snap.slippageMode === "dynamic" ? "dynamic" : `-${snap.slippagePct ?? snap.pessimisticPct}%`})</span>
             <span className="font-bold">{usd(p.totalValueUsd)}</span>
           </div>
           <div className="flex items-center justify-between">
