@@ -69,23 +69,25 @@ const TRADERS = [
 ];
 
 function fmt(val: number): string {
-  if (Math.abs(val) >= 1_000_000) return (val / 1_000_000).toFixed(2) + "M";
-  if (Math.abs(val) >= 1_000) return (val / 1_000).toFixed(2) + "K";
-  return val.toFixed(2);
+  const v = val ?? 0;
+  if (Math.abs(v) >= 1_000_000) return (v / 1_000_000).toFixed(2) + "M";
+  if (Math.abs(v) >= 1_000) return (v / 1_000).toFixed(2) + "K";
+  return v.toFixed(2);
 }
 
 function usd(val: number): string {
-  return "$" + fmt(val);
+  return "$" + fmt(val ?? 0);
 }
 
 function pnlColor(val: number): string {
-  if (val > 0) return "text-green-500";
-  if (val < 0) return "text-red-500";
+  const v = val ?? 0;
+  if (v > 0) return "text-green-500";
+  if (v < 0) return "text-red-500";
   return "text-muted-foreground";
 }
 
 function pnlSign(val: number): string {
-  return val >= 0 ? "+" : "";
+  return (val ?? 0) >= 0 ? "+" : "";
 }
 
 function timeAgo(ms: number): string {
@@ -163,7 +165,7 @@ function TraderCard({ traderId }: { traderId: string }) {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">P&L</span>
             <span className={`font-bold ${pnlColor(i.totalPnl)}`}>
-              {pnlSign(i.totalPnl)}{usd(i.totalPnl)} ({pnlSign(i.totalPnlPct)}{i.totalPnlPct.toFixed(1)}%)
+              {pnlSign(i.totalPnl)}{usd(i.totalPnl)} ({pnlSign(i.totalPnlPct)}{(i.totalPnlPct ?? 0).toFixed(1)}%)
             </span>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -181,7 +183,7 @@ function TraderCard({ traderId }: { traderId: string }) {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">P&L</span>
             <span className={`font-bold ${pnlColor(p.totalPnl)}`}>
-              {pnlSign(p.totalPnl)}{usd(p.totalPnl)} ({pnlSign(p.totalPnlPct)}{p.totalPnlPct.toFixed(1)}%)
+              {pnlSign(p.totalPnl)}{usd(p.totalPnl)} ({pnlSign(p.totalPnlPct)}{(p.totalPnlPct ?? 0).toFixed(1)}%)
             </span>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -220,7 +222,7 @@ function TraderCard({ traderId }: { traderId: string }) {
                       )}
                       <span className={pnlColor(pos.unrealizedPnl)}>
                         {pnlSign(pos.unrealizedPnl)}{usd(pos.unrealizedPnl)}
-                        ({pnlSign(pos.unrealizedPnlPct)}{pos.unrealizedPnlPct.toFixed(1)}%)
+                        ({pnlSign(pos.unrealizedPnlPct)}{(pos.unrealizedPnlPct ?? 0).toFixed(1)}%)
                       </span>
                       <span className="text-muted-foreground">{timeAgo(pos.entryTime)}</span>
                     </span>
@@ -259,16 +261,16 @@ function TraderCard({ traderId }: { traderId: string }) {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-muted-foreground">
-                        imp:{t.priceImpact.toFixed(2)}%
+                        imp:{(t.priceImpact ?? 0).toFixed(2)}%
                       </span>
                       <span className="text-muted-foreground">
                         fee:{usd(t.feeUsd)}
                       </span>
-                      <span className={pnlColor(t.idealTradePnl)}>
-                        I:{pnlSign(t.idealTradePnl)}{usd(t.idealTradePnl)}
+                      <span className={pnlColor(t.idealTradePnl ?? t.idealPnl)}>
+                        I:{pnlSign(t.idealTradePnl ?? t.idealPnl)}{usd(t.idealTradePnl ?? t.idealPnl)}
                       </span>
-                      <span className={pnlColor(t.pessTradePnl)}>
-                        P:{pnlSign(t.pessTradePnl)}{usd(t.pessTradePnl)}
+                      <span className={pnlColor(t.pessTradePnl ?? t.pessPnl)}>
+                        P:{pnlSign(t.pessTradePnl ?? t.pessPnl)}{usd(t.pessTradePnl ?? t.pessPnl)}
                       </span>
                       <span className="text-muted-foreground">
                         {timeAgo(t.time)}
