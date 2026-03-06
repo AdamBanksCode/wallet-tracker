@@ -33,6 +33,17 @@ interface Swap {
   pools: string[];
 }
 
+const WALLET_LABELS: Record<string, { label: string; color: string }> = {
+  DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm: {
+    label: "gake",
+    color: "bg-violet-500/15 text-violet-400 border-violet-500/20",
+  },
+  "2T5NgDDidkvhJQg8AHDi74uCFwgp25pYFMRZXBaCUNBH": {
+    label: "IDontPayTaxes",
+    color: "bg-cyan-500/15 text-cyan-400 border-cyan-500/20",
+  },
+};
+
 function formatUsd(val: number): string {
   if (val >= 1_000_000_000) return "$" + (val / 1_000_000_000).toFixed(2) + "B";
   if (val >= 1_000_000) return "$" + (val / 1_000_000).toFixed(2) + "M";
@@ -72,8 +83,24 @@ function computeMcap(swap: Swap): number | null {
   const tokenSide = isBuy ? swap.to : swap.from;
   const token = tokenSide.token;
   if (!token.price?.usd || token.price.usd <= 0) return null;
-  // Most Solana memecoins (pump.fun etc) have 1B supply
   return token.price.usd * 1_000_000_000;
+}
+
+function CopyMint({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(address);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      className="text-[9px] text-amber-500/80 dark:text-amber-400/80 hover:text-amber-500 dark:hover:text-amber-400 transition-colors cursor-pointer truncate max-w-[260px]"
+      title={address}
+    >
+      {copied ? "Copied!" : address}
+    </button>
+  );
 }
 
 function SwapCard({ swap }: { swap: Swap }) {
@@ -83,17 +110,18 @@ function SwapCard({ swap }: { swap: Swap }) {
   const token = tokenSide.token;
   const solAmount = solSide.amount;
   const mcap = computeMcap(swap);
+  const walletInfo = WALLET_LABELS[swap.wallet];
 
   return (
     <div
-      className={`border-l-2 rounded-md bg-card px-3 py-2 text-xs animate-in fade-in slide-in-from-top-1 duration-200 ${
-        isBuy ? "border-l-green-500" : "border-l-red-500"
+      className={`rounded-lg border bg-card px-3.5 py-2.5 text-xs transition-colors hover:bg-accent/30 ${
+        isBuy ? "border-green-500/20" : "border-red-500/20"
       }`}
     >
-      {/* Row 1: Direction + Token + Volume + Age */}
+      {/* Row 1: Direction badge + Wallet badge + Token + Volume + Age */}
       <div className="flex items-center gap-1.5">
         <span
-          className={`font-bold text-[10px] px-1 py-0.5 rounded ${
+          className={`font-bold text-[10px] px-1.5 py-0.5 rounded ${
             isBuy
               ? "bg-green-500/15 text-green-500"
               : "bg-red-500/15 text-red-500"
@@ -101,78 +129,83 @@ function SwapCard({ swap }: { swap: Swap }) {
         >
           {isBuy ? "BUY" : "SELL"}
         </span>
+        {walletInfo && (
+          <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded border ${walletInfo.color}`}>
+            {walletInfo.label}
+          </span>
+        )}
         {token.image && (
           <img
             src={token.image}
             alt=""
-            className="w-4 h-4 rounded-full"
+            className="w-4 h-4 rounded-full ring-1 ring-border"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
           />
         )}
         <span className="font-bold truncate">{token.name}</span>
-        <span className="text-muted-foreground">{token.symbol}</span>
-        <span className="ml-auto text-green-500 font-semibold">
+        <span className="text-muted-foreground text-[10px]">{token.symbol}</span>
+        <span className="ml-auto font-semibold tabular-nums">
           {formatUsd(swap.volume.usd)}
         </span>
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground text-[10px]">
           <AgeCounter detectedAt={swap.time} />
         </span>
       </div>
 
-      {/* Row 2: Contract address */}
-      <code className="text-[9px] text-amber-500 dark:text-amber-400 select-all cursor-pointer block mt-1 truncate">
-        {token.address}
-      </code>
+      {/* Row 2: Contract address (clickable to copy) */}
+      <div className="mt-1">
+        <CopyMint address={token.address} />
+      </div>
 
-      {/* Row 3: Swap details inline */}
+      {/* Row 3: Swap details */}
       <div className="flex items-center gap-3 mt-1.5 text-muted-foreground flex-wrap">
         <span>
           {isBuy ? "Spent " : "Sold "}
-          <span className="text-foreground font-medium">
+          <span className="text-foreground font-medium tabular-nums">
             {isBuy
               ? formatSol(solAmount)
               : formatAmount(swap.from.amount) + " " + swap.from.token.symbol}
           </span>
         </span>
+        <span className="text-border">|</span>
         <span>
           {"Got "}
-          <span className="text-foreground font-medium">
+          <span className="text-foreground font-medium tabular-nums">
             {isBuy
               ? formatAmount(swap.to.amount) + " " + swap.to.token.symbol
               : formatSol(solAmount)}
           </span>
         </span>
-        <span>
-          {"@ "}
-          <span className="text-foreground font-medium">
-            {formatUsd(swap.price.usd)}
-          </span>
-        </span>
         {mcap != null && (
-          <span>
-            {"MC "}
-            <span className="text-foreground font-medium">
-              {formatUsd(mcap)}
+          <>
+            <span className="text-border">|</span>
+            <span>
+              {"MC "}
+              <span className="text-foreground font-medium tabular-nums">
+                {formatUsd(mcap)}
+              </span>
             </span>
-          </span>
+          </>
         )}
-        <span className="text-[10px]">{swap.program}</span>
       </div>
 
-      {/* Row 4: Tx link */}
-      <div className="flex items-center justify-between mt-1 text-[9px] text-muted-foreground">
-        <a
-          href={`https://solscan.io/tx/${swap.tx}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hover:text-foreground transition-colors truncate"
-          title={swap.tx}
-        >
-          {swap.tx.slice(0, 24)}...
-        </a>
-        <span>{formatSol(swap.volume.sol)} vol</span>
+      {/* Row 4: Tx + program + vol */}
+      <div className="flex items-center justify-between mt-1.5 text-[9px] text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <a
+            href={`https://solscan.io/tx/${swap.tx}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground transition-colors truncate"
+            title={swap.tx}
+          >
+            {swap.tx.slice(0, 20)}...
+          </a>
+          <span className="opacity-60">{swap.program}</span>
+        </div>
+        <span className="tabular-nums">{formatSol(swap.volume.sol)} vol</span>
       </div>
     </div>
   );
@@ -196,10 +229,8 @@ export default function SwapFeed() {
           const data = JSON.parse(ev.data);
           if (data === "ping") return;
 
-          // Handle connection message
           if (data.type === "connected") return;
 
-          // Handle history batch (sent on reconnect/refresh)
           if (data.type === "history" && Array.isArray(data.swaps)) {
             const historySwaps: Swap[] = [];
             let vol = 0;
@@ -227,7 +258,6 @@ export default function SwapFeed() {
             return;
           }
 
-          // Handle individual swap
           const swap: Swap = data;
           if (!swap.tx || seenTxs.has(swap.tx)) return;
           seenTxs.add(swap.tx);
@@ -252,27 +282,30 @@ export default function SwapFeed() {
   }, []);
 
   return (
-    <div className="space-y-1.5" ref={scrollRef}>
+    <div className="space-y-2" ref={scrollRef}>
       {/* Status bar */}
-      <div className="flex items-center justify-between text-[10px] pb-1">
-        <div className="flex items-center gap-1.5">
-          <div
-            className={`w-1.5 h-1.5 rounded-full ${
-              connected ? "bg-green-500 animate-pulse" : "bg-red-500"
-            }`}
-          />
-          <span className="text-muted-foreground">
-            {connected ? "Live" : "Reconnecting..."}
-          </span>
+      <div className="flex items-center justify-between text-[10px]">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                connected ? "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)]" : "bg-red-500"
+              }`}
+            />
+            <span className={connected ? "text-green-500/80" : "text-red-500/80"}>
+              {connected ? "Connected" : "Reconnecting..."}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-3 text-muted-foreground">
-          <span>Trades: {stats.total}</span>
-          <span>Vol: {formatUsd(stats.totalVolume)}</span>
+        <div className="flex items-center gap-3 text-muted-foreground tabular-nums">
+          <span>{stats.total} trades</span>
+          <span className="text-border">|</span>
+          <span>{formatUsd(stats.totalVolume)} vol</span>
         </div>
       </div>
 
       {swaps.length === 0 && (
-        <div className="text-center text-muted-foreground py-12 text-sm">
+        <div className="text-center text-muted-foreground py-16 text-sm border border-dashed border-border rounded-lg">
           Waiting for trades...
         </div>
       )}

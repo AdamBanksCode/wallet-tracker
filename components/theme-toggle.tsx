@@ -7,9 +7,10 @@ export default function ThemeToggle() {
   return (
     <button
       onClick={toggle}
-      className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent transition-colors"
+      className="rounded-md border border-border px-2.5 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
+      title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
-      {theme === "dark" ? "☀ Light" : "◑ Dark"}
+      {theme === "dark" ? "Light" : "Dark"}
     </button>
   );
 }

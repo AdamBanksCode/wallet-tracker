@@ -69,7 +69,6 @@ interface Snapshot {
   recentTrades: Trade[];
 }
 
-// Group buys/sells by token for the Tokens tab
 interface TokenGroup {
   mint: string;
   symbol: string;
@@ -88,8 +87,8 @@ interface TokenGroup {
 }
 
 const TRADERS = [
-  { id: "gake", label: "gake" },
-  { id: "idontpaytaxes", label: "IDontPayTaxes" },
+  { id: "gake", label: "gake", accent: "violet" },
+  { id: "idontpaytaxes", label: "IDontPayTaxes", accent: "cyan" },
 ];
 
 type Tab = "summary" | "positions" | "tokens" | "trades";
@@ -111,6 +110,13 @@ function pnlColor(val: number): string {
   if (v > 0) return "text-green-500";
   if (v < 0) return "text-red-500";
   return "text-muted-foreground";
+}
+
+function pnlBg(val: number): string {
+  const v = val ?? 0;
+  if (v > 0) return "bg-green-500/10";
+  if (v < 0) return "bg-red-500/10";
+  return "bg-muted/30";
 }
 
 function pnlSign(val: number): string {
@@ -139,10 +145,10 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
-      className="text-[9px] px-1 py-0.5 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+      className="text-[9px] px-1.5 py-0.5 rounded bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-all border border-transparent hover:border-border"
       title={text}
     >
-      {copied ? "copied" : shortMint(text)}
+      {copied ? "copied!" : shortMint(text)}
     </button>
   );
 }
@@ -154,11 +160,24 @@ function TxLink({ tx }: { tx: string }) {
       href={`https://solscan.io/tx/${tx}`}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-[9px] text-blue-400 hover:text-blue-300"
+      className="text-[9px] text-blue-400/80 hover:text-blue-400 transition-colors"
       onClick={(e) => e.stopPropagation()}
     >
       tx
     </a>
+  );
+}
+
+// --- Stat Card (for summary) ---
+function StatRow({ label, value, sub, pnl }: { label: string; value: string; sub?: string; pnl?: number }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-2">
+        <span className={`font-semibold tabular-nums ${pnl != null ? pnlColor(pnl) : ""}`}>{value}</span>
+        {sub && <span className="text-[10px] text-muted-foreground tabular-nums">{sub}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -167,43 +186,53 @@ function SummaryTab({ snap }: { snap: Snapshot }) {
   const i = snap.ideal;
   const p = snap.pessimistic;
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        {/* Ideal */}
-        <div className="border-l-2 border-l-blue-500 pl-2">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Ideal</span>
-            <span className="font-bold">{usd(i.totalValueUsd)}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">P&L</span>
-            <span className={`font-bold ${pnlColor(i.totalPnl)}`}>
-              {pnlSign(i.totalPnl)}{usd(i.totalPnl)} ({pnlSign(i.totalPnlPct)}{(i.totalPnlPct ?? 0).toFixed(1)}%)
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span>cash: {usd(i.cashUsd)}</span>
-            <span>open: {usd(i.openPositionValueUsd)}</span>
-            <span>realized: <span className={pnlColor(i.realizedPnl)}>{pnlSign(i.realizedPnl)}{usd(i.realizedPnl)}</span></span>
-          </div>
+    <div className="grid grid-cols-2 gap-3">
+      {/* Ideal */}
+      <div className="rounded-lg bg-blue-500/5 border border-blue-500/10 p-3 space-y-0.5">
+        <div className="flex items-center gap-1.5 mb-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+          <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">Ideal</span>
         </div>
-        {/* Pessimistic */}
-        <div className="border-l-2 border-l-orange-500 pl-2">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Pessimistic ({snap.slippageMode === "dynamic" ? "dynamic" : `-${snap.slippagePct ?? snap.pessimisticPct}%`})</span>
-            <span className="font-bold">{usd(p.totalValueUsd)}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">P&L</span>
-            <span className={`font-bold ${pnlColor(p.totalPnl)}`}>
-              {pnlSign(p.totalPnl)}{usd(p.totalPnl)} ({pnlSign(p.totalPnlPct)}{(p.totalPnlPct ?? 0).toFixed(1)}%)
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span>cash: {usd(p.cashUsd)}</span>
-            <span>open: {usd(p.openPositionValueUsd)}</span>
-            <span>realized: <span className={pnlColor(p.realizedPnl)}>{pnlSign(p.realizedPnl)}{usd(p.realizedPnl)}</span></span>
-          </div>
+        <StatRow label="Portfolio" value={usd(i.totalValueUsd)} />
+        <StatRow
+          label="Total P&L"
+          value={`${pnlSign(i.totalPnl)}${usd(i.totalPnl)}`}
+          sub={`${pnlSign(i.totalPnlPct)}${(i.totalPnlPct ?? 0).toFixed(1)}%`}
+          pnl={i.totalPnl}
+        />
+        <div className="border-t border-border/50 mt-1.5 pt-1.5">
+          <StatRow label="Cash" value={usd(i.cashUsd)} />
+          <StatRow label="Open" value={usd(i.openPositionValueUsd)} />
+          <StatRow
+            label="Realized"
+            value={`${pnlSign(i.realizedPnl)}${usd(i.realizedPnl)}`}
+            pnl={i.realizedPnl}
+          />
+        </div>
+      </div>
+      {/* Pessimistic */}
+      <div className="rounded-lg bg-orange-500/5 border border-orange-500/10 p-3 space-y-0.5">
+        <div className="flex items-center gap-1.5 mb-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+          <span className="text-[10px] font-semibold text-orange-400 uppercase tracking-wider">
+            Pessimistic {snap.slippageMode === "dynamic" ? "(dynamic)" : `(-${snap.slippagePct ?? snap.pessimisticPct}%)`}
+          </span>
+        </div>
+        <StatRow label="Portfolio" value={usd(p.totalValueUsd)} />
+        <StatRow
+          label="Total P&L"
+          value={`${pnlSign(p.totalPnl)}${usd(p.totalPnl)}`}
+          sub={`${pnlSign(p.totalPnlPct)}${(p.totalPnlPct ?? 0).toFixed(1)}%`}
+          pnl={p.totalPnl}
+        />
+        <div className="border-t border-border/50 mt-1.5 pt-1.5">
+          <StatRow label="Cash" value={usd(p.cashUsd)} />
+          <StatRow label="Open" value={usd(p.openPositionValueUsd)} />
+          <StatRow
+            label="Realized"
+            value={`${pnlSign(p.realizedPnl)}${usd(p.realizedPnl)}`}
+            pnl={p.realizedPnl}
+          />
         </div>
       </div>
     </div>
@@ -216,48 +245,58 @@ function PositionsTab({ snap }: { snap: Snapshot }) {
   const pess = snap.pessimistic;
 
   if (ideal.length === 0) {
-    return <div className="text-[10px] text-muted-foreground py-2">No open positions</div>;
+    return <div className="text-[10px] text-muted-foreground py-4 text-center">No open positions</div>;
   }
 
   return (
-    <div className="space-y-0.5 max-h-64 overflow-y-auto">
-      <div className="grid grid-cols-[1fr_auto] gap-1 text-[9px] text-muted-foreground font-semibold border-b border-border pb-0.5 mb-0.5">
-        <span>TOKEN</span>
-        <span className="text-right">COST / NOW / PNL</span>
-      </div>
+    <div className="space-y-1 max-h-72 overflow-y-auto">
       {ideal.map((pos) => {
         const pp = pess.openPositions.find((x) => x.mint === pos.mint);
         const hasLive = pos.livePriceTime && (Date.now() - pos.livePriceTime) < 300000;
         return (
-          <div key={pos.mint} className="py-1 border-b border-border/50 last:border-0">
-            <div className="flex items-center justify-between">
+          <div key={pos.mint} className="rounded-lg border border-border/50 p-2.5 hover:border-border transition-colors">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-1.5">
                 <span className="font-bold">{pos.symbol}</span>
                 <CopyButton text={pos.mint} />
-                {hasLive && <span className="text-[8px] text-green-500/60">LIVE</span>}
+                {hasLive && (
+                  <span className="text-[8px] text-green-500/80 flex items-center gap-0.5">
+                    <span className="w-1 h-1 rounded-full bg-green-500 inline-block shadow-[0_0_4px_rgba(34,197,94,0.5)]" />
+                    LIVE
+                  </span>
+                )}
               </div>
-              <span className="text-muted-foreground">{timeAgo(pos.entryTime)}</span>
+              <span className="text-[10px] text-muted-foreground">{timeAgo(pos.entryTime)}</span>
             </div>
             {/* Ideal row */}
-            <div className="flex items-center justify-between mt-0.5">
-              <span className="text-[9px] text-blue-400">Ideal</span>
-              <div className="flex items-center gap-2 text-[10px]">
-                <span className="text-muted-foreground">cost:{usd(pos.entryUsd)}</span>
-                <span className="text-muted-foreground">now:{usd(pos.currentValueUsd)}</span>
-                <span className={pnlColor(pos.unrealizedPnl)}>
-                  {pnlSign(pos.unrealizedPnl)}{usd(pos.unrealizedPnl)} ({(pos.unrealizedPnlPct ?? 0).toFixed(1)}%)
+            <div className="flex items-center justify-between text-[10px]">
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-blue-500 inline-block" />
+                <span className="text-blue-400 text-[9px]">Ideal</span>
+              </div>
+              <div className="flex items-center gap-3 tabular-nums">
+                <span className="text-muted-foreground">cost {usd(pos.entryUsd)}</span>
+                <span className="text-muted-foreground">now {usd(pos.currentValueUsd)}</span>
+                <span className={`font-medium ${pnlColor(pos.unrealizedPnl)}`}>
+                  {pnlSign(pos.unrealizedPnl)}{usd(pos.unrealizedPnl)}
+                  <span className="opacity-70 ml-0.5">({(pos.unrealizedPnlPct ?? 0).toFixed(1)}%)</span>
                 </span>
               </div>
             </div>
             {/* Pess row */}
             {pp && (
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] text-orange-400">Pess</span>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className="text-muted-foreground">cost:{usd(pp.entryUsd)}</span>
-                  <span className="text-muted-foreground">now:{usd(pp.currentValueUsd)}</span>
-                  <span className={pnlColor(pp.unrealizedPnl)}>
-                    {pnlSign(pp.unrealizedPnl)}{usd(pp.unrealizedPnl)} ({(pp.unrealizedPnlPct ?? 0).toFixed(1)}%)
+              <div className="flex items-center justify-between text-[10px] mt-0.5">
+                <div className="flex items-center gap-1">
+                  <span className="w-1 h-1 rounded-full bg-orange-500 inline-block" />
+                  <span className="text-orange-400 text-[9px]">Pess</span>
+                </div>
+                <div className="flex items-center gap-3 tabular-nums">
+                  <span className="text-muted-foreground">cost {usd(pp.entryUsd)}</span>
+                  <span className="text-muted-foreground">now {usd(pp.currentValueUsd)}</span>
+                  <span className={`font-medium ${pnlColor(pp.unrealizedPnl)}`}>
+                    {pnlSign(pp.unrealizedPnl)}{usd(pp.unrealizedPnl)}
+                    <span className="opacity-70 ml-0.5">({(pp.unrealizedPnlPct ?? 0).toFixed(1)}%)</span>
                   </span>
                 </div>
               </div>
@@ -302,13 +341,10 @@ function TokensTab({ snap }: { snap: Snapshot }) {
         g.totalSellUsd += t.walletUsdVolume;
         if (t.mcUsd) g.exitMc = t.mcUsd;
       }
-      const pnl = t.idealTradePnl ?? 0;
-      const ppnl = t.pessTradePnl ?? 0;
-      g.idealRealizedPnl += pnl;
-      g.pessRealizedPnl += ppnl;
+      g.idealRealizedPnl += t.idealTradePnl ?? 0;
+      g.pessRealizedPnl += t.pessTradePnl ?? 0;
       if (t.time > g.lastTradeTime) g.lastTradeTime = t.time;
     }
-    // Attach open positions
     for (const pos of snap.ideal.openPositions) {
       if (map[pos.mint]) map[pos.mint].openPosition = pos;
     }
@@ -321,76 +357,85 @@ function TokensTab({ snap }: { snap: Snapshot }) {
   const [expandedMint, setExpandedMint] = useState<string | null>(null);
 
   if (groups.length === 0) {
-    return <div className="text-[10px] text-muted-foreground py-2">No trades yet</div>;
+    return <div className="text-[10px] text-muted-foreground py-4 text-center">No trades yet</div>;
   }
 
   return (
-    <div className="space-y-0.5 max-h-72 overflow-y-auto">
+    <div className="space-y-1 max-h-80 overflow-y-auto">
       {groups.map((g) => {
         const isOpen = !!g.openPosition;
         const totalIdealPnl = g.idealRealizedPnl + (g.openPosition?.unrealizedPnl ?? 0);
         const expanded = expandedMint === g.mint;
         return (
-          <div key={g.mint} className="border-b border-border/50 last:border-0">
+          <div key={g.mint} className={`rounded-lg border transition-colors ${expanded ? "border-border bg-muted/20" : "border-border/50 hover:border-border"}`}>
             {/* Token header row */}
             <button
               onClick={() => setExpandedMint(expanded ? null : g.mint)}
-              className="w-full flex items-center justify-between py-1 hover:bg-muted/30 transition-colors"
+              className="w-full flex items-center justify-between px-2.5 py-2 text-left"
             >
               <div className="flex items-center gap-1.5">
-                <span className={`text-[8px] font-bold px-1 rounded ${isOpen ? "bg-blue-500/15 text-blue-400" : "bg-muted text-muted-foreground"}`}>
+                <span
+                  className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${
+                    isOpen
+                      ? "bg-blue-500/15 text-blue-400 border border-blue-500/20"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
                   {isOpen ? "OPEN" : "CLOSED"}
                 </span>
                 <span className="font-bold">{g.symbol}</span>
                 <CopyButton text={g.mint} />
                 <span className="text-[9px] text-muted-foreground">
-                  {g.buys.length}B {g.sells.length}S
+                  {g.buys.length}B / {g.sells.length}S
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[10px]">
                 {g.entryMc && (
-                  <span className="text-muted-foreground">MC:{usd(g.entryMc)}</span>
+                  <span className="text-muted-foreground tabular-nums">MC {usd(g.entryMc)}</span>
                 )}
-                <span className={pnlColor(totalIdealPnl)}>
+                <span className={`font-semibold tabular-nums ${pnlColor(totalIdealPnl)}`}>
                   {pnlSign(totalIdealPnl)}{usd(totalIdealPnl)}
                 </span>
-                <span className="text-muted-foreground text-[9px]">{timeAgo(g.lastTradeTime)}</span>
-                <span className="text-[8px] text-muted-foreground">{expanded ? "▲" : "▼"}</span>
+                <span className="text-muted-foreground text-[9px] tabular-nums">{timeAgo(g.lastTradeTime)}</span>
+                <span className="text-[8px] text-muted-foreground w-3">{expanded ? "▲" : "▼"}</span>
               </div>
             </button>
 
             {/* Expanded detail */}
             {expanded && (
-              <div className="pl-2 pb-1.5 space-y-1">
+              <div className="px-2.5 pb-2.5 space-y-2 border-t border-border/50">
                 {/* Token info */}
-                <div className="text-[10px] text-muted-foreground">{g.name}</div>
+                <div className="text-[10px] text-muted-foreground pt-2">{g.name}</div>
 
                 {/* Position summary */}
-                <div className="grid grid-cols-2 gap-2 text-[10px]">
-                  <div>
-                    <span className="text-muted-foreground">Bought: </span>
-                    <span>{usd(g.totalBuyUsd)}</span>
-                    {g.entryMc && <span className="text-muted-foreground ml-1">@ MC {usd(g.entryMc)}</span>}
+                <div className="grid grid-cols-2 gap-3 text-[10px]">
+                  <div className="flex items-center gap-1">
+                    <span className="text-green-500/80">Bought:</span>
+                    <span className="tabular-nums">{usd(g.totalBuyUsd)}</span>
+                    {g.entryMc && <span className="text-muted-foreground">@ MC {usd(g.entryMc)}</span>}
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Sold: </span>
-                    <span>{usd(g.totalSellUsd)}</span>
-                    {g.exitMc && <span className="text-muted-foreground ml-1">@ MC {usd(g.exitMc)}</span>}
+                  <div className="flex items-center gap-1">
+                    <span className="text-red-500/80">Sold:</span>
+                    <span className="tabular-nums">{usd(g.totalSellUsd)}</span>
+                    {g.exitMc && <span className="text-muted-foreground">@ MC {usd(g.exitMc)}</span>}
                   </div>
                 </div>
 
                 {/* Open position */}
                 {g.openPosition && (
-                  <div className="text-[10px] bg-blue-500/5 rounded px-1.5 py-0.5">
+                  <div className="rounded-md bg-blue-500/5 border border-blue-500/10 px-2.5 py-1.5 text-[10px]">
                     <div className="flex justify-between">
-                      <span className="text-blue-400">Open Position (Ideal)</span>
-                      <span className={pnlColor(g.openPosition.unrealizedPnl)}>
+                      <div className="flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-blue-500 inline-block" />
+                        <span className="text-blue-400">Open Position (Ideal)</span>
+                      </div>
+                      <span className={`font-medium tabular-nums ${pnlColor(g.openPosition.unrealizedPnl)}`}>
                         {pnlSign(g.openPosition.unrealizedPnl)}{usd(g.openPosition.unrealizedPnl)} ({(g.openPosition.unrealizedPnlPct ?? 0).toFixed(1)}%)
                       </span>
                     </div>
-                    <div className="flex gap-3 text-muted-foreground">
-                      <span>cost:{usd(g.openPosition.entryUsd)}</span>
-                      <span>now:{usd(g.openPosition.currentValueUsd)}</span>
+                    <div className="flex gap-3 text-muted-foreground mt-0.5 tabular-nums">
+                      <span>cost {usd(g.openPosition.entryUsd)}</span>
+                      <span>now {usd(g.openPosition.currentValueUsd)}</span>
                     </div>
                   </div>
                 )}
@@ -399,31 +444,31 @@ function TokensTab({ snap }: { snap: Snapshot }) {
                 <div className="flex gap-4 text-[10px]">
                   <div>
                     <span className="text-muted-foreground">Ideal realized: </span>
-                    <span className={pnlColor(g.idealRealizedPnl)}>{pnlSign(g.idealRealizedPnl)}{usd(g.idealRealizedPnl)}</span>
+                    <span className={`tabular-nums ${pnlColor(g.idealRealizedPnl)}`}>{pnlSign(g.idealRealizedPnl)}{usd(g.idealRealizedPnl)}</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Pess realized: </span>
-                    <span className={pnlColor(g.pessRealizedPnl)}>{pnlSign(g.pessRealizedPnl)}{usd(g.pessRealizedPnl)}</span>
+                    <span className={`tabular-nums ${pnlColor(g.pessRealizedPnl)}`}>{pnlSign(g.pessRealizedPnl)}{usd(g.pessRealizedPnl)}</span>
                   </div>
                 </div>
 
                 {/* Individual trades */}
-                <div className="text-[9px] text-muted-foreground font-semibold">TRADES</div>
+                <div className="text-[9px] text-muted-foreground font-semibold uppercase tracking-wider">Trades</div>
                 <div className="space-y-0.5">
                   {[...g.buys, ...g.sells]
                     .sort((a, b) => b.time - a.time)
                     .map((t, idx) => (
-                      <div key={t.originalTx || idx} className="flex items-center justify-between text-[10px] py-0.5 pl-1 border-l border-border">
+                      <div key={t.originalTx || idx} className="flex items-center justify-between text-[10px] py-1 px-1.5 rounded hover:bg-muted/30 transition-colors border-l-2 border-border/50">
                         <div className="flex items-center gap-1">
                           <span className={`font-bold px-1 rounded ${t.type === "buy" ? "bg-green-500/15 text-green-500" : "bg-red-500/15 text-red-500"}`}>
                             {t.type === "buy" ? "BUY" : `SELL${t.sellPct != null ? ` ${((t.sellPct ?? 0) * 100).toFixed(0)}%` : ""}`}
                           </span>
-                          <span className="text-muted-foreground">their:{usd(t.walletUsdVolume)}</span>
-                          {t.mcUsd && <span className="text-muted-foreground">MC:{usd(t.mcUsd)}</span>}
+                          <span className="text-muted-foreground tabular-nums">vol {usd(t.walletUsdVolume)}</span>
+                          {t.mcUsd && <span className="text-muted-foreground tabular-nums">MC {usd(t.mcUsd)}</span>}
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-muted-foreground">imp:{(t.priceImpact ?? 0).toFixed(2)}%</span>
-                          <span className="text-muted-foreground">fee:{usd(t.feeUsd)}</span>
+                        <div className="flex items-center gap-1.5 tabular-nums">
+                          <span className="text-muted-foreground">imp {(t.priceImpact ?? 0).toFixed(2)}%</span>
+                          <span className="text-muted-foreground">fee {usd(t.feeUsd)}</span>
                           {t.type === "sell" && (
                             <span className={pnlColor(t.idealTradePnl ?? t.idealPnl)}>
                               I:{pnlSign(t.idealTradePnl ?? t.idealPnl)}{usd(t.idealTradePnl ?? t.idealPnl)}
@@ -447,18 +492,18 @@ function TokensTab({ snap }: { snap: Snapshot }) {
   );
 }
 
-// --- Trades Tab (flat list, all details) ---
+// --- Trades Tab (flat list) ---
 function TradesTab({ snap }: { snap: Snapshot }) {
   if (snap.recentTrades.length === 0) {
-    return <div className="text-[10px] text-muted-foreground py-2">No trades yet</div>;
+    return <div className="text-[10px] text-muted-foreground py-4 text-center">No trades yet</div>;
   }
 
   return (
-    <div className="space-y-0.5 max-h-72 overflow-y-auto">
+    <div className="space-y-0.5 max-h-80 overflow-y-auto">
       {snap.recentTrades.map((t, idx) => (
         <div
           key={t.originalTx || idx}
-          className="flex items-center justify-between text-[10px] py-0.5 border-b border-border/30 last:border-0"
+          className="flex items-center justify-between text-[10px] py-1.5 px-1.5 rounded hover:bg-muted/30 transition-colors border-b border-border/30 last:border-0"
         >
           <div className="flex items-center gap-1">
             <span
@@ -472,16 +517,16 @@ function TradesTab({ snap }: { snap: Snapshot }) {
             </span>
             <span className="font-semibold">{t.tokenSymbol}</span>
             <CopyButton text={t.tokenMint} />
-            <span className="text-muted-foreground">{usd(t.walletUsdVolume)}</span>
-            {t.mcUsd && <span className="text-muted-foreground">MC:{usd(t.mcUsd)}</span>}
+            <span className="text-muted-foreground tabular-nums">{usd(t.walletUsdVolume)}</span>
+            {t.mcUsd && <span className="text-muted-foreground tabular-nums">MC {usd(t.mcUsd)}</span>}
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-muted-foreground">imp:{(t.priceImpact ?? 0).toFixed(2)}%</span>
-            <span className="text-muted-foreground">fee:{usd(t.feeUsd)}</span>
-            <span className={pnlColor(t.idealTradePnl ?? t.idealPnl)}>
+          <div className="flex items-center gap-1.5 tabular-nums">
+            <span className="text-muted-foreground">imp {(t.priceImpact ?? 0).toFixed(2)}%</span>
+            <span className="text-muted-foreground">fee {usd(t.feeUsd)}</span>
+            <span className={`font-medium ${pnlColor(t.idealTradePnl ?? t.idealPnl)}`}>
               I:{pnlSign(t.idealTradePnl ?? t.idealPnl)}{usd(t.idealTradePnl ?? t.idealPnl)}
             </span>
-            <span className={pnlColor(t.pessTradePnl ?? t.pessPnl)}>
+            <span className={`font-medium ${pnlColor(t.pessTradePnl ?? t.pessPnl)}`}>
               P:{pnlSign(t.pessTradePnl ?? t.pessPnl)}{usd(t.pessTradePnl ?? t.pessPnl)}
             </span>
             <TxLink tx={t.originalTx} />
@@ -494,7 +539,7 @@ function TradesTab({ snap }: { snap: Snapshot }) {
 }
 
 // --- Main TraderCard ---
-function TraderCard({ traderId }: { traderId: string }) {
+function TraderCard({ traderId, accent }: { traderId: string; accent: string }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [tab, setTab] = useState<Tab>("summary");
 
@@ -521,8 +566,8 @@ function TraderCard({ traderId }: { traderId: string }) {
 
   if (!snap) {
     return (
-      <div className="bg-card rounded-md px-3 py-2 text-xs text-muted-foreground">
-        {traderId}: loading...
+      <div className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground animate-pulse">
+        Loading {traderId}...
       </div>
     );
   }
@@ -535,60 +580,77 @@ function TraderCard({ traderId }: { traderId: string }) {
   ];
 
   const i = snap.ideal;
+  const accentBorder = accent === "violet" ? "border-violet-500/30" : "border-cyan-500/30";
+  const accentDot = accent === "violet" ? "bg-violet-500" : "bg-cyan-500";
+  const accentText = accent === "violet" ? "text-violet-400" : "text-cyan-400";
 
   return (
-    <div className="bg-card rounded-md px-3 py-2 text-xs space-y-1.5">
+    <div className={`rounded-lg border bg-card text-xs overflow-hidden ${accentBorder}`}>
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-sm">{snap.walletLabel}</span>
-          <span className={`font-bold ${pnlColor(i.totalPnl)}`}>
-            {pnlSign(i.totalPnl)}{usd(i.totalPnl)} ({(i.totalPnlPct ?? 0).toFixed(1)}%)
+      <div className="px-3.5 py-2.5 flex items-center justify-between border-b border-border/50">
+        <div className="flex items-center gap-2.5">
+          <div className={`w-2 h-2 rounded-full ${accentDot}`} />
+          <span className={`font-bold text-sm ${accentText}`}>{snap.walletLabel}</span>
+          <span className={`font-bold tabular-nums ${pnlColor(i.totalPnl)} ${pnlBg(i.totalPnl)} px-1.5 py-0.5 rounded`}>
+            {pnlSign(i.totalPnl)}{usd(i.totalPnl)}
+            <span className="opacity-70 ml-0.5">({(i.totalPnlPct ?? 0).toFixed(1)}%)</span>
           </span>
         </div>
-        <span className="text-muted-foreground">
-          fees:{usd(snap.totalFeesUsd)} | SOL {usd(snap.solPriceUsd)}
-        </span>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground tabular-nums">
+          <span>fees {usd(snap.totalFeesUsd)}</span>
+          <span className="text-border">|</span>
+          <span>SOL {usd(snap.solPriceUsd)}</span>
+        </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-0.5 border-b border-border pb-0.5">
+      <div className="px-3.5 pt-2 flex gap-1">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-2 py-0.5 rounded-t text-[10px] font-medium transition-colors ${
+            className={`px-2.5 py-1 rounded-t-md text-[10px] font-medium transition-all ${
               tab === t.key
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-muted text-foreground border-b-2 border-foreground/20"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
             }`}
           >
             {t.label}
             {t.count != null && t.count > 0 && (
-              <span className="ml-0.5 text-[8px] opacity-60">{t.count}</span>
+              <span className="ml-1 text-[8px] bg-muted-foreground/20 px-1 rounded-full">{t.count}</span>
             )}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
-      {tab === "summary" && <SummaryTab snap={snap} />}
-      {tab === "positions" && <PositionsTab snap={snap} />}
-      {tab === "tokens" && <TokensTab snap={snap} />}
-      {tab === "trades" && <TradesTab snap={snap} />}
+      <div className="px-3.5 py-2.5">
+        {tab === "summary" && <SummaryTab snap={snap} />}
+        {tab === "positions" && <PositionsTab snap={snap} />}
+        {tab === "tokens" && <TokensTab snap={snap} />}
+        {tab === "trades" && <TradesTab snap={snap} />}
+      </div>
     </div>
   );
 }
 
 export default function PaperDashboard() {
   return (
-    <div className="space-y-2">
-      <div className="text-[10px] text-muted-foreground font-semibold">
-        PAPER TRADING — $2,000 start, $200 max/trade
+    <section>
+      <div className="flex items-center gap-2 mb-3">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Paper Trading
+        </h2>
+        <span className="text-[9px] text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
+          $2K start / $200 max
+        </span>
+        <div className="flex-1 h-px bg-border" />
       </div>
-      {TRADERS.map((t) => (
-        <TraderCard key={t.id} traderId={t.id} />
-      ))}
-    </div>
+      <div className="space-y-3">
+        {TRADERS.map((t) => (
+          <TraderCard key={t.id} traderId={t.id} accent={t.accent} />
+        ))}
+      </div>
+    </section>
   );
 }
