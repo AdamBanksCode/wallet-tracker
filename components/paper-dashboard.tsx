@@ -87,7 +87,6 @@ interface TokenGroup {
 
 const TRADERS = [
   { id: "gake", label: "gake" },
-  { id: "intresting", label: "intresting" },
 ];
 
 type Tab = "summary" | "positions" | "tokens" | "trades";
