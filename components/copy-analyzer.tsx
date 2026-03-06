@@ -180,6 +180,9 @@ interface RoundTrip {
   theirSellSol: number;
   theirPnlSol: number;
   theirPnlPct: number;
+  // Token holdings for open positions (net tokens bought - sold)
+  tokenHeld: number;
+  avgBuyPriceSol: number; // avg price per token in SOL at entry
   // Our copy P&L at each slot delay (in SOL)
   ourBuySol: number; // base cost without friction
   ideal: { pnlSol: number; pnlPct: number };
@@ -212,6 +215,12 @@ function buildRoundTrips(swaps: BackfillSwap[], solPrice: number): RoundTrip[] {
     const theirSellSol = sells.reduce((s, b) => s + b.solAmount, 0);
     const isOpen = sells.length === 0 || sells[sells.length - 1].blockTime < buys[buys.length - 1].blockTime;
     const theirPnlSol = theirSellSol - theirBuySol;
+
+    // Track net token holdings for unrealized P&L
+    const tokensBought = buys.reduce((s, b) => s + b.tokenAmount, 0);
+    const tokensSold = sells.reduce((s, b) => s + b.tokenAmount, 0);
+    const tokenHeld = Math.max(0, tokensBought - tokensSold);
+    const avgBuyPriceSol = tokensBought > 0 ? theirBuySol / tokensBought : 0;
 
     // Our copy: compute for each slot delay
     const maxSol = Math.min(COPY_SIZE_SOL, MAX_COPY_USD / solPrice);
@@ -270,6 +279,8 @@ function buildRoundTrips(swaps: BackfillSwap[], solPrice: number): RoundTrip[] {
       theirSellSol,
       theirPnlSol,
       theirPnlPct: theirBuySol > 0 ? (theirPnlSol / theirBuySol) * 100 : 0,
+      tokenHeld,
+      avgBuyPriceSol,
       ourBuySol: ourBaseBuySol,
       ideal: {
         pnlSol: idealPnlSol,
@@ -467,6 +478,7 @@ export default function CopyAnalyzer() {
   const [data, setData] = useState<BackfillData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({}); // tokenMint -> current price in SOL
 
   useEffect(() => {
     setLoading(true);
@@ -502,6 +514,65 @@ export default function CopyAnalyzer() {
     return buildRoundTrips(filteredSwaps, solPrice);
   }, [filteredSwaps, solPrice]);
 
+  // Fetch live prices for open position tokens
+  useEffect(() => {
+    const openMints = trips.filter((t) => t.isOpen && t.tokenHeld > 0).map((t) => t.tokenMint);
+    if (openMints.length === 0) { setLivePrices({}); return; }
+
+    // Batch in groups of 100
+    const batches: string[][] = [];
+    for (let i = 0; i < openMints.length; i += 100) {
+      batches.push(openMints.slice(i, i + 100));
+    }
+
+    let cancelled = false;
+    (async () => {
+      const allPrices: Record<string, number> = {};
+      for (const batch of batches) {
+        try {
+          const resp = await fetch(`/api/prices?ids=${batch.join(",")}`);
+          if (resp.ok) {
+            const json = await resp.json();
+            Object.assign(allPrices, json.prices || {});
+          }
+        } catch { /* ignore */ }
+      }
+      if (!cancelled) setLivePrices(allPrices);
+    })();
+
+    return () => { cancelled = true; };
+  }, [trips]);
+
+  // Compute unrealized P&L for open positions
+  const unrealized = useMemo(() => {
+    const openTrips = trips.filter((t) => t.isOpen && t.tokenHeld > 0);
+    let theirUnrealizedSol = 0;
+    let deployedSol = 0;
+    let pricedCount = 0;
+
+    for (const t of openTrips) {
+      const currentPrice = livePrices[t.tokenMint];
+      // SOL they spent that hasn't been sold yet
+      const costBasis = t.theirBuySol - t.theirSellSol;
+      deployedSol += costBasis;
+
+      if (currentPrice && currentPrice > 0) {
+        // Current value of remaining tokens in SOL
+        const currentValueSol = t.tokenHeld * currentPrice;
+        theirUnrealizedSol += currentValueSol - costBasis;
+        pricedCount++;
+      }
+    }
+
+    return {
+      theirUnrealizedSol,
+      theirUnrealizedUsd: theirUnrealizedSol * solPrice,
+      deployedSol,
+      openCount: openTrips.length,
+      pricedCount,
+    };
+  }, [trips, livePrices, solPrice]);
+
   const chartData = useMemo(() => {
     if (filteredSwaps.length === 0) return [];
     return buildChartData(filteredSwaps, solPrice);
@@ -510,11 +581,17 @@ export default function CopyAnalyzer() {
   const stats = useMemo(() => {
     if (trips.length === 0) return null;
     const completedOnly = trips.filter((t) => !t.isOpen);
+    const realizedSol = completedOnly.reduce((s, t) => s + t.theirPnlSol, 0);
     const their = {
-      // Only count completed round trips — open positions are NOT losses
-      netSol: completedOnly.reduce((s, t) => s + t.theirPnlSol, 0),
+      realizedSol,
+      realizedUsd: realizedSol * solPrice,
+      unrealizedSol: unrealized.theirUnrealizedSol,
+      unrealizedUsd: unrealized.theirUnrealizedUsd,
+      totalSol: realizedSol + unrealized.theirUnrealizedSol,
+      totalUsd: (realizedSol + unrealized.theirUnrealizedSol) * solPrice,
       totalBuySol: completedOnly.reduce((s, t) => s + t.theirBuySol, 0),
       totalSellSol: completedOnly.reduce((s, t) => s + t.theirSellSol, 0),
+      deployedSol: unrealized.deployedSol,
     };
     return {
       totalSwaps: filteredSwaps.length,
@@ -525,14 +602,13 @@ export default function CopyAnalyzer() {
       completedTrips: completedOnly.length,
       openTrips: trips.filter((t) => t.isOpen).length,
       their,
-      theirNetUsd: their.netSol * solPrice,
       ideal: computeStats(trips, solPrice, "ideal"),
       s1: computeStats(trips, solPrice, "slot1"),
       s2: computeStats(trips, solPrice, "slot2"),
       s4: computeStats(trips, solPrice, "slot4"),
       totalFeesSol: trips.reduce((s, t) => s + t.totalFeesSol, 0),
     };
-  }, [trips, filteredSwaps, solPrice]);
+  }, [trips, filteredSwaps, solPrice, unrealized]);
 
   // Thin-margin breakdown: how many completed trips are below the threshold
   // and what's the damage from copying those trades
@@ -651,7 +727,9 @@ export default function CopyAnalyzer() {
                 )}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
-                Their actual: <span className={pnlColor(stats.theirNetUsd)}>{sign(stats.theirNetUsd)}{$(stats.theirNetUsd)}</span> ({stats.their.totalBuySol.toFixed(1)} SOL in, {stats.their.totalSellSol.toFixed(1)} SOL out)
+                Their total P&L: <span className={pnlColor(stats.their.totalUsd)}>{sign(stats.their.totalUsd)}{$(stats.their.totalUsd)}</span>
+                {" "}(realized {sign(stats.their.realizedUsd)}{$(stats.their.realizedUsd)} + unrealized {sign(stats.their.unrealizedUsd)}{$(stats.their.unrealizedUsd)}
+                {unrealized.pricedCount < unrealized.openCount && `, ${unrealized.pricedCount}/${unrealized.openCount} priced`})
               </div>
               {data && (
                 <div className="text-[9px] text-muted-foreground mt-1">
@@ -664,18 +742,25 @@ export default function CopyAnalyzer() {
             <div className="grid grid-cols-5 gap-2">
               {(() => {
                 const cards: { label: string; sub: string; color: string; netSol: number; netUsd: number; ss: ScenarioStats | null }[] = [
-                  { label: "THEIR ACTUAL", sub: "real P&L", color: "text-purple-600 dark:text-purple-400", netSol: stats.their.netSol, netUsd: stats.theirNetUsd, ss: null },
+                  { label: "THEIR ACTUAL", sub: "realized + unrealized", color: "text-purple-600 dark:text-purple-400", netSol: stats.their.totalSol, netUsd: stats.their.totalUsd, ss: null },
                   { label: "OUR COPY (IDEAL)", sub: "0 delay, no fees", color: "text-blue-600 dark:text-blue-400", netSol: stats.ideal.netSol, netUsd: stats.ideal.netUsd, ss: stats.ideal },
                   { label: "+1 SLOT", sub: "~400ms delay", color: "text-amber-600 dark:text-amber-400", netSol: stats.s1.netSol, netUsd: stats.s1.netUsd, ss: stats.s1 },
                   { label: "+2 SLOTS", sub: "~800ms delay", color: "text-orange-600 dark:text-orange-400", netSol: stats.s2.netSol, netUsd: stats.s2.netUsd, ss: stats.s2 },
                   { label: "+4 SLOTS", sub: "~1.6s delay", color: "text-red-600 dark:text-red-400", netSol: stats.s4.netSol, netUsd: stats.s4.netUsd, ss: stats.s4 },
                 ];
-                return cards.map(({ label, sub, color, netSol, netUsd, ss }) => (
+                return cards.map(({ label, sub, color, netSol, netUsd, ss }, idx) => (
                   <div key={label} className="border border-border rounded p-2 text-[11px]">
                     <div className={`text-[9px] font-bold mb-1 ${color}`}>{label}</div>
                     <div className="text-[10px] text-muted-foreground mb-1.5">{sub}</div>
-                    <Metric label="Net P&L" v={`${sign(netUsd)}${$(netUsd)}`} pnl={netUsd} />
+                    <Metric label="Total P&L" v={`${sign(netUsd)}${$(netUsd)}`} pnl={netUsd} />
                     <Metric label="In SOL" v={`${sign(netSol)}${netSol.toFixed(2)}`} pnl={netSol} />
+                    {idx === 0 && (
+                      <>
+                        <Metric label="Realized" v={`${sign(stats.their.realizedUsd)}${$(stats.their.realizedUsd)}`} pnl={stats.their.realizedSol} />
+                        <Metric label="Unrealized" v={`${sign(stats.their.unrealizedUsd)}${$(stats.their.unrealizedUsd)}`} pnl={stats.their.unrealizedSol} />
+                        <Metric label="Deployed" v={`${stats.their.deployedSol.toFixed(1)} SOL`} />
+                      </>
+                    )}
                     {ss && <Metric label="Win Rate" v={`${ss.winRate.toFixed(0)}% (${ss.wins}W/${ss.losses}L)`} />}
                     {ss && <Metric label="PF" v={ss.pf === Infinity ? "INF" : ss.pf.toFixed(2)} />}
                     {ss && <Metric label="EV/Trade" v={`${sign(ss.evSol * solPrice)}${$(ss.evSol * solPrice)}`} pnl={ss.evSol} />}
@@ -761,6 +846,16 @@ export default function CopyAnalyzer() {
                       t.holdDurationSec < 3600 ? `${Math.floor(t.holdDurationSec / 60)}m` :
                       t.holdDurationSec < 86400 ? `${Math.floor(t.holdDurationSec / 3600)}h${Math.floor((t.holdDurationSec % 3600) / 60)}m` :
                       `${Math.floor(t.holdDurationSec / 86400)}d`;
+                    // For open positions, compute unrealized P&L from live price
+                    let theirDisplayPnl = t.theirPnlSol;
+                    if (t.isOpen && t.tokenHeld > 0) {
+                      const livePrice = livePrices[t.tokenMint];
+                      if (livePrice && livePrice > 0) {
+                        const costBasis = t.theirBuySol - t.theirSellSol;
+                        const currentVal = t.tokenHeld * livePrice;
+                        theirDisplayPnl = currentVal - costBasis;
+                      }
+                    }
                     return (
                       <div key={t.tokenMint + t.entryTime} className="flex items-center text-[11px] border-b border-border/30 hover:bg-muted/30 transition-colors px-3">
                         <span className={`w-10 shrink-0 py-1.5 font-bold ${t.isOpen ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}`}>
@@ -769,8 +864,9 @@ export default function CopyAnalyzer() {
                         <span className="w-20 shrink-0 py-1.5"><CopyBtn text={t.tokenMint} /></span>
                         <span className="w-10 shrink-0 text-right py-1.5 text-muted-foreground tabular-nums">{t.buys.length}B/{t.sells.length}S</span>
                         <span className="flex-1 text-right py-1.5 tabular-nums text-muted-foreground">{t.theirBuySol.toFixed(2)}/{t.theirSellSol.toFixed(2)}</span>
-                        <span className={`flex-1 text-right py-1.5 tabular-nums font-medium ${pnlColor(t.theirPnlSol)}`}>
-                          {sign(t.theirPnlSol * solPrice)}{$(t.theirPnlSol * solPrice)}
+                        <span className={`flex-1 text-right py-1.5 tabular-nums font-medium ${pnlColor(theirDisplayPnl)}`}>
+                          {sign(theirDisplayPnl * solPrice)}{$(theirDisplayPnl * solPrice)}
+                          {t.isOpen && <span className="text-[8px] text-blue-500 ml-0.5">U</span>}
                         </span>
                         <span className={`flex-1 text-right py-1.5 tabular-nums font-medium ${pnlColor(t.ideal.pnlSol)}`}>
                           {sign(t.ideal.pnlSol * solPrice)}{$(t.ideal.pnlSol * solPrice)}
