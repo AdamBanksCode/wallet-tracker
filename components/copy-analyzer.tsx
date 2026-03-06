@@ -309,34 +309,55 @@ function buildChartData(swaps: BackfillSwap[], solPrice: number): ChartPoint[] {
   const slotCums: Record<number, number> = { 1: 0, 2: 0, 4: 0 };
   const points: ChartPoint[] = [];
 
-  // Track open positions for their P&L
-  const positions: Record<string, { totalSol: number; tokens: number }> = {};
+  // Track per-token cost basis so we only realize P&L on sells
+  const costBasis: Record<string, { theirSol: number; ourSol: number; slotCosts: Record<number, number> }> = {};
 
   for (const swap of sorted) {
     const ourBase = Math.min(swap.solAmount, maxSol);
-
-    if (swap.type === "buy") {
-      // They spend SOL
-      if (!positions[swap.tokenMint]) positions[swap.tokenMint] = { totalSol: 0, tokens: 0 };
-      positions[swap.tokenMint].totalSol += swap.solAmount;
-      positions[swap.tokenMint].tokens += swap.tokenAmount;
-      theirCum -= swap.solAmount; // cost
-      idealCum -= ourBase;
-    } else {
-      // They receive SOL
-      theirCum += swap.solAmount;
-      idealCum += ourBase;
-    }
-
     const isFirst = !firstBuySeen.has(swap.tokenMint) && swap.type === "buy";
     if (isFirst) firstBuySeen.add(swap.tokenMint);
 
-    for (const slots of [1, 2, 4]) {
-      const r = computeSlotScenario(swap, slots, solPrice, isFirst);
-      if (swap.type === "buy") {
-        slotCums[slots] -= r.ourEntrySol;
+    if (swap.type === "buy") {
+      // Accumulate cost basis — don't count as P&L yet
+      if (!costBasis[swap.tokenMint]) {
+        costBasis[swap.tokenMint] = { theirSol: 0, ourSol: 0, slotCosts: { 1: 0, 2: 0, 4: 0 } };
+      }
+      costBasis[swap.tokenMint].theirSol += swap.solAmount;
+      costBasis[swap.tokenMint].ourSol += ourBase;
+      for (const slots of [1, 2, 4]) {
+        const r = computeSlotScenario(swap, slots, solPrice, isFirst);
+        costBasis[swap.tokenMint].slotCosts[slots] += r.ourEntrySol;
+      }
+    } else {
+      // Sell: realize P&L proportional to what was sold
+      const basis = costBasis[swap.tokenMint];
+      if (basis && basis.theirSol > 0) {
+        // What fraction of their position is being sold
+        const frac = Math.min(1, swap.solAmount / basis.theirSol);
+
+        // Their realized P&L: sell proceeds - proportional cost
+        theirCum += swap.solAmount - basis.theirSol * frac;
+        idealCum += ourBase - basis.ourSol * frac;
+
+        for (const slots of [1, 2, 4]) {
+          const r = computeSlotScenario(swap, slots, solPrice, false);
+          slotCums[slots] += r.ourExitSol - basis.slotCosts[slots] * frac;
+        }
+
+        // Reduce cost basis
+        basis.theirSol *= (1 - frac);
+        basis.ourSol *= (1 - frac);
+        for (const slots of [1, 2, 4]) {
+          basis.slotCosts[slots] *= (1 - frac);
+        }
       } else {
-        slotCums[slots] += r.ourExitSol;
+        // No cost basis (sold without tracked buy) — count as pure profit
+        theirCum += swap.solAmount;
+        idealCum += ourBase;
+        for (const slots of [1, 2, 4]) {
+          const r = computeSlotScenario(swap, slots, solPrice, false);
+          slotCums[slots] += r.ourExitSol;
+        }
       }
     }
 
@@ -389,7 +410,8 @@ function computeStats(
   const losses = completed.filter((t) => getPnl(t) <= 0);
   const gp = wins.reduce((s, t) => s + getPnl(t), 0);
   const gl = Math.abs(losses.reduce((s, t) => s + getPnl(t), 0));
-  const netSol = trips.reduce((s, t) => s + getPnl(t), 0);
+  // Only count completed trips for net P&L — open positions are NOT losses
+  const netSol = completed.reduce((s, t) => s + getPnl(t), 0);
 
   return {
     netSol,
@@ -441,6 +463,7 @@ function PnLChart({ data }: { data: ChartPoint[] }) {
 export default function CopyAnalyzer() {
   const [selected, setSelected] = useState(TRADERS[0].id);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("30d");
+  const [minProfitPct, setMinProfitPct] = useState(0); // 0 = off, 15 = skip trades where their P&L < 15%
   const [data, setData] = useState<BackfillData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -479,35 +502,61 @@ export default function CopyAnalyzer() {
     return buildRoundTrips(filteredSwaps, solPrice);
   }, [filteredSwaps, solPrice]);
 
+  // Filter out trips where the trader's profit % is below the min threshold
+  // This handles the IDPT problem: tiny-margin trades that can't be copied profitably
+  const copyableTrips = useMemo(() => {
+    if (minProfitPct === 0) return trips;
+    return trips.map((t) => {
+      if (t.isOpen) return t; // keep open trips as-is (they're excluded from stats anyway)
+      if (t.theirPnlPct >= minProfitPct) return t; // passes filter
+      return null; // skip: their margin too thin to copy
+    }).filter(Boolean) as RoundTrip[];
+  }, [trips, minProfitPct]);
+
+  // For the chart, filter out swaps belonging to tokens that failed the min profit filter
+  const copyableSwaps = useMemo(() => {
+    if (minProfitPct === 0) return filteredSwaps;
+    const copyableTokens = new Set(copyableTrips.map((t) => t.tokenMint));
+    return filteredSwaps.filter((s) => copyableTokens.has(s.tokenMint));
+  }, [filteredSwaps, copyableTrips, minProfitPct]);
+
+  const skippedTrips = useMemo(() => {
+    if (minProfitPct === 0) return 0;
+    return trips.filter((t) => !t.isOpen && t.theirPnlPct < minProfitPct).length;
+  }, [trips, minProfitPct]);
+
   const chartData = useMemo(() => {
-    if (filteredSwaps.length === 0) return [];
-    return buildChartData(filteredSwaps, solPrice);
-  }, [filteredSwaps, solPrice]);
+    if (copyableSwaps.length === 0) return [];
+    return buildChartData(copyableSwaps, solPrice);
+  }, [copyableSwaps, solPrice]);
 
   const stats = useMemo(() => {
-    if (trips.length === 0) return null;
+    if (copyableTrips.length === 0) return null;
+    const completedOnly = copyableTrips.filter((t) => !t.isOpen);
     const their = {
-      netSol: trips.reduce((s, t) => s + t.theirPnlSol, 0),
-      totalBuySol: trips.reduce((s, t) => s + t.theirBuySol, 0),
-      totalSellSol: trips.reduce((s, t) => s + t.theirSellSol, 0),
+      // Only count completed round trips — open positions are NOT losses
+      netSol: completedOnly.reduce((s, t) => s + t.theirPnlSol, 0),
+      totalBuySol: completedOnly.reduce((s, t) => s + t.theirBuySol, 0),
+      totalSellSol: completedOnly.reduce((s, t) => s + t.theirSellSol, 0),
     };
     return {
-      totalSwaps: filteredSwaps.length,
-      totalBuys: filteredSwaps.filter((s) => s.type === "buy").length,
-      totalSells: filteredSwaps.filter((s) => s.type === "sell").length,
-      uniqueTokens: new Set(filteredSwaps.map((s) => s.tokenMint)).size,
-      totalTrips: trips.length,
-      completedTrips: trips.filter((t) => !t.isOpen).length,
-      openTrips: trips.filter((t) => t.isOpen).length,
+      totalSwaps: copyableSwaps.length,
+      totalBuys: copyableSwaps.filter((s) => s.type === "buy").length,
+      totalSells: copyableSwaps.filter((s) => s.type === "sell").length,
+      uniqueTokens: new Set(copyableSwaps.map((s) => s.tokenMint)).size,
+      totalTrips: copyableTrips.length,
+      completedTrips: completedOnly.length,
+      openTrips: copyableTrips.filter((t) => t.isOpen).length,
       their,
       theirNetUsd: their.netSol * solPrice,
-      ideal: computeStats(trips, solPrice, "ideal"),
-      s1: computeStats(trips, solPrice, "slot1"),
-      s2: computeStats(trips, solPrice, "slot2"),
-      s4: computeStats(trips, solPrice, "slot4"),
-      totalFeesSol: trips.reduce((s, t) => s + t.totalFeesSol, 0),
+      ideal: computeStats(copyableTrips, solPrice, "ideal"),
+      s1: computeStats(copyableTrips, solPrice, "slot1"),
+      s2: computeStats(copyableTrips, solPrice, "slot2"),
+      s4: computeStats(copyableTrips, solPrice, "slot4"),
+      totalFeesSol: copyableTrips.reduce((s, t) => s + t.totalFeesSol, 0),
+      skippedTrips,
     };
-  }, [trips, filteredSwaps, solPrice]);
+  }, [copyableTrips, copyableSwaps, solPrice, skippedTrips]);
 
   // ─── Render ──────────────────────────────────────────────────────────
 
@@ -541,6 +590,22 @@ export default function CopyAnalyzer() {
           ))}
         </div>
         <div className="flex items-center gap-0 pr-1">
+          <div className="flex items-center mr-2 border-r border-border pr-2">
+            <span className="text-[9px] text-muted-foreground mr-1">MIN&nbsp;P&L</span>
+            {[0, 15, 25, 50].map((pct) => (
+              <button
+                key={pct}
+                onClick={() => setMinProfitPct(pct)}
+                className={`px-1.5 py-1 text-[10px] font-medium rounded transition-colors mx-0.5 ${
+                  minProfitPct === pct
+                    ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                }`}
+              >
+                {pct === 0 ? "OFF" : `${pct}%`}
+              </button>
+            ))}
+          </div>
           {(["7d", "30d", "60d", "90d"] as TimeFilter[]).map((tf) => (
             <button
               key={tf}
@@ -579,6 +644,9 @@ export default function CopyAnalyzer() {
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
                 at +1 slot delay ({COPY_SIZE_SOL} SOL/trade, fees + slippage) | {stats.completedTrips} completed round trips, {stats.openTrips} open
+                {stats.skippedTrips > 0 && (
+                  <span className="text-purple-600 dark:text-purple-400"> | {stats.skippedTrips} skipped (&lt;{minProfitPct}% their P&L)</span>
+                )}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5">
                 Their actual: <span className={pnlColor(stats.theirNetUsd)}>{sign(stats.theirNetUsd)}{$(stats.theirNetUsd)}</span> ({stats.their.totalBuySol.toFixed(1)} SOL in, {stats.their.totalSellSol.toFixed(1)} SOL out)
@@ -642,7 +710,7 @@ export default function CopyAnalyzer() {
             {/* Round Trip Table */}
             <div>
               <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase mb-2">
-                ROUND TRIPS ({stats.completedTrips} completed, {stats.openTrips} open)
+                ROUND TRIPS ({stats.completedTrips} completed, {stats.openTrips} open{stats.skippedTrips > 0 ? `, ${stats.skippedTrips} skipped` : ""})
               </div>
               <div className="border border-border rounded overflow-hidden">
                 <div className="flex items-center text-[9px] text-muted-foreground border-b border-border uppercase font-medium bg-muted/30 px-3">
@@ -658,7 +726,7 @@ export default function CopyAnalyzer() {
                   <span className="w-14 text-right py-1.5">Hold</span>
                 </div>
                 <div className="max-h-72 overflow-y-auto">
-                  {trips.map((t) => {
+                  {copyableTrips.map((t) => {
                     const holdStr = t.holdDurationSec < 60 ? `${t.holdDurationSec}s` :
                       t.holdDurationSec < 3600 ? `${Math.floor(t.holdDurationSec / 60)}m` :
                       t.holdDurationSec < 86400 ? `${Math.floor(t.holdDurationSec / 3600)}h${Math.floor((t.holdDurationSec % 3600) / 60)}m` :
@@ -697,7 +765,7 @@ export default function CopyAnalyzer() {
             {/* Individual Trade Log */}
             <div>
               <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase mb-2">
-                TRADE LOG — THEIR ENTRY vs OUR DELAYED ENTRY ({filteredSwaps.length} swaps)
+                TRADE LOG — THEIR ENTRY vs OUR DELAYED ENTRY ({copyableSwaps.length} swaps)
               </div>
               <div className="border border-border rounded overflow-hidden">
                 <div className="flex items-center text-[9px] text-muted-foreground border-b border-border uppercase font-medium bg-muted/30 px-3">
@@ -712,7 +780,7 @@ export default function CopyAnalyzer() {
                   <span className="w-14 text-right py-1.5">Date</span>
                 </div>
                 <div className="max-h-56 overflow-y-auto">
-                  {filteredSwaps.slice(0, 200).map((swap, i) => {
+                  {copyableSwaps.slice(0, 200).map((swap, i) => {
                     const maxSol = Math.min(COPY_SIZE_SOL, MAX_COPY_USD / solPrice);
                     const ourBase = Math.min(swap.solAmount, maxSol);
                     const s1 = computeSlotScenario(swap, 1, solPrice, false);
